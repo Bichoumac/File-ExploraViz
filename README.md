@@ -255,7 +255,7 @@ sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step
      `SUPPLEMENTARY_GIDS=<gid>` (several values separated by commas).
    * `FEV_TAG`: `latest` follows releases; set a version (e.g. `1.0.0`) to pin it.
 
-5. Click **Deploy**. Dockge pulls the image (about 190 MB once extracted), then the stack logs
+5. Click **Deploy**. Dockge pulls the image (66 MB to download, about 190 MB once extracted), then the stack logs
    should show, in this order:
    ```
    msg="exécution en tant que 3000:3000"
@@ -537,9 +537,10 @@ in French.
 ## Known limitations
 
 **Deployment**
-* **Not yet tested on a real TrueNAS/Dockge install.** The Dockge procedure was replayed with
-  Docker 29.1 under WSL2 (deploy, update after rebuild, permissions); TrueNAS menu names may differ
-  slightly between versions.
+* **Not yet tested on a real TrueNAS/Dockge install.** The Dockge steps (deploy, update,
+  permissions, `PUID`/`PGID`) were replayed with Docker 29.1 under WSL2 using a locally built image;
+  the published image is built and tested by the CI workflow. TrueNAS menu names may differ slightly
+  between versions.
 * The published image is built for `linux/amd64` and `linux/arm64` only (no 32-bit ARM).
 * Single process, single worker: the scan thread shares the Python GIL with the API, so requests
   are a little slower while a scan runs.
