@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>File ExploraViz</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/explorer" aria-label="File ExploraViz, accueil">
+      <img src="/favicon.svg" alt="" width="26" height="26">
+      <span>File ExploraViz</span>
+    </a>
+    <nav class="tabs" id="tabs" aria-label="Navigation principale" hidden>
+      <a href="#/explorer" data-page="explorer" data-icon="folder"><span>Explorateur</span></a>
+      <a href="#/stats" data-page="stats" data-icon="chart"><span>Statistiques</span></a>
+      <a href="#/treemap" data-page="treemap" data-icon="grid"><span>Treemap</span></a>
+      <a href="#/config" data-page="config" data-icon="sliders"><span>Configuration</span></a>
+    </nav>
+    <div class="top-actions">
+      <button class="btn primary" id="scan-btn" type="button" hidden>Lancer un scan maintenant</button>
+      <button class="icon-btn" id="theme-btn" type="button" title="Basculer le thème clair/sombre" aria-label="Basculer le thème clair/sombre"></button>
+      <button class="icon-btn" id="logout-btn" type="button" title="Se déconnecter" aria-label="Se déconnecter" hidden></button>
+    </div>
+  </header>
+
+  <section class="scanbar" id="scanbar" hidden aria-live="polite"></section>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <main id="main" tabindex="-1"></main>
+
+  <footer class="footer" id="footer"></footer>
+</body>
+</html>

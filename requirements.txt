@@ -1,0 +1,8 @@
+# Dépendances d'exécution (versions figées, testées)
+fastapi==0.160.0
+starlette==1.9.0
+uvicorn==0.54.0
+pydantic==2.14.1
+PyYAML==6.0.3
+numpy==2.5.4
+bcrypt==5.0.0
