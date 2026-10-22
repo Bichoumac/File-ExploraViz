@@ -10,7 +10,7 @@ services:
     container_name: file-exploraviz
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-8080}:8080"
+      - "${HOST_PORT:-59125}:8080"      # UI on http://<host>:59125
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
