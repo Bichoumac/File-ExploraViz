@@ -168,15 +168,16 @@ function renderScan(st) {
     <div class="line">
       <b>${statusLabel(st.status)}</b>
       <span>${PHASE_KEYS[st.phase] ? t(PHASE_KEYS[st.phase]) : ''}</span>
-      <span>${t('scan.counts', { files: `<b>${fmtInt(st.files)}</b>`, dirs: `<b>${fmtInt(st.dirs)}</b>`, bytes: `<b>${fmtBytes(st.bytes)}</b>` })}</span>
+      ${st.files == null ? '' : `<span>${t('scan.counts', { files: `<b>${fmtInt(st.files)}</b>`, dirs: `<b>${fmtInt(st.dirs)}</b>`, bytes: `<b>${fmtBytes(st.bytes)}</b>` })}</span>`}
       <span>${t('scan.elapsed', { d: fmtDuration(st.elapsed_s) })}${st.files_per_s ? ` · ${t('scan.speed', { n: fmtInt(Math.round(st.files_per_s)) })}` : ''}</span>
       ${st.inaccessible ? `<span>${t('scan.inaccessible', { n: fmtInt(st.inaccessible) })}</span>` : ''}
       <span>${p == null ? '' : `<b>${fmtPct(p, 0)}</b>${estimate ? ` (${t('scan.estimate')})` : ''}`}</span>
     </div>
-    <button class="btn small danger" type="button" data-cancel ${st.status === 'cancelling' ? 'disabled' : ''}>${t('scan.cancel')}</button>
+    ${app.isAdmin ? `<button class="btn small danger" type="button" data-cancel ${st.status === 'cancelling' ? 'disabled' : ''}>${t('scan.cancel')}</button>` : '<span></span>'}
     <div class="progress ${p == null ? 'indeterminate' : ''}"><div style="width:${p ?? 0}%"></div></div>
     <div class="dir" title="${esc(st.current_dir)}">${st.current_root ? `${esc(st.current_root)} › ` : ''}${esc(st.current_dir || '')}</div>`;
-  bar.querySelector('[data-cancel]').onclick = cancelScan;
+  const cancelBtn = bar.querySelector('[data-cancel]');
+  if (cancelBtn) cancelBtn.onclick = cancelScan;
 }
 
 function renderFooter(st) {
@@ -245,7 +246,10 @@ async function boot() {
   if (!state.user) return authForm({ setup: false });
   app.started = true;
   app.authDisabled = state.auth_disabled;
-  scanBtn.hidden = false;
+  app.user = state.user;
+  app.role = state.role;
+  app.isAdmin = state.role === 'admin';
+  scanBtn.hidden = !app.isAdmin; // lancer un scan : administrateurs seulement
   document.getElementById('tabs').hidden = false;
   document.getElementById('logout-btn').hidden = state.auth_disabled;
   connectEvents();

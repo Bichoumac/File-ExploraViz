@@ -1,5 +1,7 @@
-// Page Configuration : racines, planification, exclusions, catégories, compte, maintenance.
+// Page Réglages : racines, planification, exclusions, catégories, compte, comptes, maintenance.
+// Un compte viewer n'y voit que la carte de son propre compte (changement de mot de passe).
 import { locale } from './i18n.js';
+import { mountUsers } from './users.js';
 import { CATS, api, catColor, esc, fmtBytes, fmtDateTime, fmtInt, icon, t, toast } from './util.js';
 
 let el; let app; let cfg = null; let roots = [];
@@ -7,8 +9,45 @@ let el; let app; let cfg = null; let roots = [];
 export async function mount(container, _params, appCtx) {
   el = container;
   app = appCtx;
+  if (!app.isAdmin) {
+    el.innerHTML = `<div class="cfg"><div class="card wide">${accountCard(false)}</div></div>`;
+    bindPassword();
+    return;
+  }
   window.addEventListener('data-changed', refreshRoots);
   await load();
+}
+
+/** Carte « Compte » : identité et changement de son propre mot de passe. */
+function accountCard(withSession) {
+  return `
+      <div class="card-h"><h2>${t('cfg.account')}</h2></div>
+      <div class="card-b">
+        ${app.authDisabled ? `<p class="help">${t('cfg.authDisabled')}</p>` : `
+        <p class="help">${t('cfg.loggedAs', { user: `<b>${esc(app.user || '')}</b>`, role: t(`usr.role.${app.role}`) })}</p>
+        <div class="inline">
+          <label class="field">${t('cfg.pwCurrent')}<input type="password" id="c-pw-cur" autocomplete="current-password"></label>
+          <label class="field">${t('cfg.pwNew')}<input type="password" id="c-pw-new" autocomplete="new-password" minlength="8"></label>
+          <label class="field">${t('auth.confirm')}<input type="password" id="c-pw-conf" autocomplete="new-password"></label>
+          <button class="btn" type="button" id="c-pw-btn">${t('cfg.pwChange')}</button>
+        </div>`}
+        ${withSession ? `<label class="field">${t('cfg.session')}<input type="number" id="c-session" min="1" max="8760" value="${cfg.auth.session_hours}"></label>` : ''}
+      </div>`;
+}
+
+function bindPassword() {
+  const $ = (sel) => el.querySelector(sel);
+  $('#c-pw-btn')?.addEventListener('click', async () => {
+    const cur = $('#c-pw-cur').value; const nw = $('#c-pw-new').value;
+    if (nw !== $('#c-pw-conf').value) { toast(t('auth.mismatch'), 'error'); return; }
+    try {
+      await api('/api/auth/password', { method: 'POST', body: { current: cur, new: nw } });
+      ['#c-pw-cur', '#c-pw-new', '#c-pw-conf'].forEach((sel) => { $(sel).value = ''; });
+      toast(t('cfg.pwChanged'));
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  });
 }
 
 export function unmount() {
@@ -95,20 +134,7 @@ function render() {
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-h"><h2>${t('cfg.account')}</h2></div>
-      <div class="card-b">
-        ${cfg.auth_disabled ? `<p class="help">${t('cfg.authDisabled')}</p>` : `
-        <p class="help">${t('cfg.loggedAs', { user: `<b>${esc(cfg.auth.username || '')}</b>` })}</p>
-        <div class="inline">
-          <label class="field">${t('cfg.pwCurrent')}<input type="password" id="c-pw-cur" autocomplete="current-password"></label>
-          <label class="field">${t('cfg.pwNew')}<input type="password" id="c-pw-new" autocomplete="new-password" minlength="8"></label>
-          <label class="field">${t('auth.confirm')}<input type="password" id="c-pw-conf" autocomplete="new-password"></label>
-          <button class="btn" type="button" id="c-pw-btn">${t('cfg.pwChange')}</button>
-        </div>`}
-        <label class="field">${t('cfg.session')}<input type="number" id="c-session" min="1" max="8760" value="${cfg.auth.session_hours}"></label>
-      </div>
-    </div>
+    <div class="card">${accountCard(true)}</div>
 
     <div class="card wide">
       <div class="card-h"><h2>${t('cfg.categories')}</h2><button class="btn small" type="button" id="c-cat-reset">${t('cfg.defaults')}</button></div>
@@ -138,8 +164,11 @@ function render() {
       <span class="muted small" id="c-saved"></span>
       <button class="btn primary" type="submit">${t('cfg.save')}</button>
     </div>
-  </form>`;
+  </form>
+  <div class="cfg cfg-extra" id="users-wrap"></div>`;
   bind();
+  bindPassword();
+  if (!app.authDisabled) mountUsers(el.querySelector('#users-wrap'));
 }
 
 function collect() {
@@ -209,17 +238,6 @@ function bind() {
       const r = await api('/api/cache/clear', { method: 'POST' });
       toast(r.message);
       window.dispatchEvent(new CustomEvent('data-changed'));
-    } catch (ex) {
-      toast(ex.message, 'error');
-    }
-  });
-  $('#c-pw-btn')?.addEventListener('click', async () => {
-    const cur = $('#c-pw-cur').value; const nw = $('#c-pw-new').value;
-    if (nw !== $('#c-pw-conf').value) { toast(t('auth.mismatch'), 'error'); return; }
-    try {
-      await api('/api/auth/password', { method: 'POST', body: { current: cur, new: nw } });
-      ['#c-pw-cur', '#c-pw-new', '#c-pw-conf'].forEach((s) => { $(s).value = ''; });
-      toast(t('cfg.pwChanged'));
     } catch (ex) {
       toast(ex.message, 'error');
     }

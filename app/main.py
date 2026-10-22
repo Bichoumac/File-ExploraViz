@@ -18,9 +18,10 @@ from .api import auth as auth_routes
 from .api import config as config_routes
 from .api import data as data_routes
 from .api import scan as scan_routes
+from .api import users as users_routes
 from .api.deps import Context
 from .auth import LoginThrottle, hash_password
-from .config import ConfigError, ConfigManager
+from .config import ConfigError, ConfigManager, UserConfig
 from .i18n import ApiError, lang_of, tr
 from .scan_manager import AppState, ScanManager
 from .scheduler import Scheduler
@@ -35,14 +36,23 @@ CSP = (
 
 
 def _init_admin(cfg: ConfigManager, settings: Settings) -> None:
-    """ADMIN_USER / ADMIN_PASSWORD n'initialisent le compte que s'il n'existe pas encore."""
+    """ADMIN_USER / ADMIN_PASSWORD créent un administrateur seulement s'il n'en existe aucun.
+
+    Cas d'usage : premier démarrage, ou récupération quand le seul administrateur a été retiré de
+    config.yaml (mot de passe oublié). Un compte existant n'est jamais modifié.
+    """
     auth = cfg.config.auth
-    if auth.password_hash or not settings.admin_password:
+    if auth.admins or not settings.admin_password:
         return
-    auth.username = settings.admin_user or "admin"
-    auth.password_hash = hash_password(settings.admin_password)
+    username = settings.admin_user or "admin"
+    if auth.find(username) is not None:
+        log.error("ADMIN_USER désigne un compte existant non administrateur : choisissez un autre identifiant",
+                  extra={"user": username})
+        return
+    user = UserConfig(username=username, password_hash=hash_password(settings.admin_password), role="admin")
+    auth.users.append(user)
     cfg.save()
-    log.info("compte administrateur initialisé depuis l'environnement", extra={"user": auth.username})
+    log.info("compte administrateur initialisé depuis l'environnement", extra={"user": user.username})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -123,6 +133,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(data_routes.router)
     app.include_router(scan_routes.router)
     app.include_router(config_routes.router)
+    app.include_router(users_routes.router)
 
     web = settings.web_dir
     if (web / "index.html").exists():

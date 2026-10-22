@@ -367,6 +367,13 @@ details.more summary { cursor: pointer; color: var(--accent); font-size: 12px; m
 .badge.ok { color: var(--ok); }
 .badge.ko { color: var(--danger); }
 .help { font-size: 12px; color: var(--muted); margin: 0; }
+.cfg-extra { margin-top: 12px; }
+.row-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+#u-editor { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; }
+#u-editor[hidden] { display: none; }
+#u-scopes { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; }
+.scope-row { display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.u-err[hidden] { display: none; }
 
 /* ------------------------------------------------------------------ éléments réservés au téléphone */
 .tabs svg.i, .side-toggle, .filters-toggle, .mobile-sort { display: none; }
@@ -492,6 +499,13 @@ details.more summary { cursor: pointer; color: var(--accent); font-size: 12px; m
   table.data.rtable tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
   table.data.rtable td { border: 0; padding: 0; }
   table.data.rtable td:first-child { grid-column: 1 / -1; }
+  table.data.utable thead { display: none; }
+  table.data.utable tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  table.data.utable td { border: 0; padding: 0; }
+  table.data.utable td.num { grid-column: 1 / -1; text-align: left; }
+  .row-actions { justify-content: flex-start; }
+  .scope-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .scope-row input { grid-column: 1 / -1; grid-row: 2; }
   .cfg .actions { padding: 8px 12px; }
 }
 @media (max-width: 380px) {

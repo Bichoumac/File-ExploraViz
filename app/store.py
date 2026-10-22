@@ -178,6 +178,9 @@ class FileFilter:
     min_size: int | None = None
     max_size: int | None = None
     q: str = ""
+    # Périmètre autorisé (comptes restreints) : intervalles de dossiers [début, fin) fusionnés,
+    # en numérotation préfixe ; None = tout. Fait partie de la clé des caches.
+    access: tuple[tuple[int, int], ...] | None = None
 
     @property
     def has_file_filters(self) -> bool:
@@ -197,6 +200,12 @@ class Selection:
     dir_lo: int
     dir_hi: int
     found: bool = True
+    dir_mask: np.ndarray | None = None  # dossiers de [dir_lo, dir_hi) autorisés (None = tous)
+
+    def dir_ids(self) -> np.ndarray:
+        """Dossiers du périmètre de la sélection (restreints aux dossiers autorisés)."""
+        ids = np.arange(self.dir_lo, self.dir_hi, dtype=np.int64)
+        return ids if self.dir_mask is None else ids[self.dir_mask]
 
     @property
     def count(self) -> int:
@@ -565,6 +574,35 @@ class Store:
             return None
         return self.dir_lookup.get((ri, path))
 
+    # ----------------------------------------------------------------- périmètre des comptes
+
+    def access_ranges(self, scopes: tuple[tuple[str, str], ...]) -> tuple[tuple[int, int], ...]:
+        """Dossiers autorisés (racine, chemin) → intervalles [d, dir_end[d]) triés et fusionnés.
+
+        Les sous-arborescences sont emboîtées ou disjointes : un intervalle contenu dans le
+        précédent est simplement ignoré. Un dossier absent de l'index n'ouvre aucun accès.
+        """
+        ranges = sorted(
+            (d, int(self.dir_end[d]))
+            for root, path in scopes
+            if (d := self.resolve_dir(root, path)) is not None
+        )
+        merged: list[tuple[int, int]] = []
+        for a, b in ranges:
+            if merged and a < merged[-1][1]:
+                continue
+            merged.append((a, b))
+        return tuple(merged)
+
+    def inside(self, d: int, access: tuple[tuple[int, int], ...]) -> bool:
+        """Le dossier ``d`` est-il dans une sous-arborescence autorisée ?"""
+        return any(a <= d < b for a, b in access)
+
+    def visible(self, d: int, access: tuple[tuple[int, int], ...]) -> bool:
+        """Autorisé, ou ancêtre d'un dossier autorisé (navigable sans voir son contenu propre)."""
+        end = int(self.dir_end[d])
+        return any(a <= d < b or d <= a < end for a, b in access)
+
     def select(self, f: FileFilter) -> Selection:
         cached = self._sel_cache.get(f)
         if cached is not None:
@@ -573,7 +611,8 @@ class Store:
             lo, hi, dlo, dhi, found = 0, self.nfiles, 0, self.ndirs, True
         else:
             d = self.resolve_dir(f.root, f.path)
-            if d is None:
+            if d is None or (f.access is not None and not self.visible(d, f.access)):
+                # Hors périmètre : même réponse qu'un dossier inexistant (aucune fuite d'existence).
                 return Selection(0, 0, None, 0, 0, found=False)
             dend = int(self.dir_end[d]) if f.recursive else d + 1
             lo, hi, dlo, dhi, found = int(self.dir_fstart[d]), int(self.dir_fstart[dend]), d, dend, True
@@ -608,8 +647,21 @@ class Store:
         if f.q:
             both(self.name_mask(f.q)[lo:hi])
 
+        dir_mask = None
+        if f.access is not None:
+            fmask = np.zeros(hi - lo, dtype=bool)
+            dir_mask = np.zeros(dhi - dlo, dtype=bool)
+            for a, b in f.access:
+                s, e = max(int(self.dir_fstart[a]), lo), min(int(self.dir_fstart[b]), hi)
+                if s < e:
+                    fmask[s - lo : e - lo] = True
+                s, e = max(a, dlo), min(b, dhi)
+                if s < e:
+                    dir_mask[s - dlo : e - dlo] = True
+            both(fmask)
+
         idx = None if mask is None else (lo + np.flatnonzero(mask)).astype(np.int64)
-        return self._sel_cache.put(f, Selection(lo, hi, idx, dlo, dhi, found))
+        return self._sel_cache.put(f, Selection(lo, hi, idx, dlo, dhi, found, dir_mask))
 
     def name_mask(self, q: str) -> np.ndarray:
         """Masque des fichiers dont le nom contient ``q`` (ou correspond au glob ``q``)."""

@@ -56,7 +56,8 @@ def compute_stats(store: Store, sel: Selection, *, now: float | None = None, det
         for i, cid in enumerate(CATEGORY_IDS)
     ]
     fdir = sel.take(store.file_dir)
-    scope_dirs = sel.dir_hi - sel.dir_lo
+    scope_ids = sel.dir_ids()
+    scope_dirs = len(scope_ids)
     totals: dict[str, Any] = {
         "files": n,
         "bytes": total,
@@ -83,7 +84,7 @@ def compute_stats(store: Store, sel: Selection, *, now: float | None = None, det
             "newest_mtime": int(mt.max()) if n else None,
             "future_mtime": int((mt > now + DAY).sum()),
             "extensions": int(len(np.unique(exts))) if n else 0,
-            "max_depth": int(store.dir_depth[sel.dir_lo : sel.dir_hi].max(initial=0) - store.dir_depth[sel.dir_lo])
+            "max_depth": int(store.dir_depth[scope_ids].max(initial=0) - store.dir_depth[sel.dir_lo])
             if scope_dirs
             else 0,
         }
@@ -168,22 +169,24 @@ def compute_stats(store: Store, sel: Selection, *, now: float | None = None, det
     result["duplicates"] = _duplicates(store, rows, sizes)
 
     # Dossiers vides et éléments inaccessibles : dépendent du périmètre, pas des filtres fichiers
+    ids = scope_ids
+    empty = ids[(aggs.direct_count[ids] == 0) & (store.dir_end[ids] == ids + 1)] if len(ids) else np.zeros(0, np.int64)
+    in_scope = set(ids.tolist()) if sel.dir_mask is not None else None
     dl, dh = sel.dir_lo, sel.dir_hi
-    if dh > dl:
-        ids = np.arange(dl, dh)
-        empty = ids[(aggs.direct_count[dl:dh] == 0) & (store.dir_end[dl:dh] == ids + 1)]
-    else:
-        empty = np.zeros(0, np.int64)
+
+    def scoped(d: int) -> bool:
+        return dl <= d < dh and (in_scope is None or d in in_scope)
+
     result["empty_dirs"] = {"count": int(len(empty)), "sample": [_dir_ref(store, int(d)) for d in empty[:50].tolist()]}
-    bad_dirs = [d for d, _ in store.dir_error.items() if dl <= d < dh]
-    bad_entries = [(d, nm, msg) for d, nm, msg in store.entry_errors if dl <= d < dh]
+    bad_dirs = [d for d, _ in store.dir_error.items() if scoped(d)]
+    bad_entries = [(d, nm, msg) for d, nm, msg in store.entry_errors if scoped(d)]
     sample = [{**_dir_ref(store, d), "error": store.dir_error[d], "kind": "dir"} for d in bad_dirs[:100]]
     for d, nm, msg in bad_entries[: max(0, 100 - len(sample))]:
         ref = _dir_ref(store, d)
         ref["path"] = f"{ref['path']}/{nm}" if ref["path"] else nm
         sample.append({**ref, "error": msg, "kind": "file"})
     result["inaccessible"] = {"count": len(bad_dirs) + len(bad_entries), "sample": sample}
-    result["truncated_dirs"] = int((store.dir_flags[dl:dh] & 2).astype(bool).sum())
+    result["truncated_dirs"] = int((store.dir_flags[ids] & 2).astype(bool).sum())
     return result
 
 
@@ -334,23 +337,83 @@ def build_tree(
     return root
 
 
-def subdirs(store: Store, d: int) -> list[dict[str, Any]]:
-    """Sous-dossiers directs (arbre repliable de l'Explorateur), triés par nom."""
+def _allowed_below(store: Store, k: int, access: tuple[tuple[int, int], ...]) -> list[int]:
+    """Dossiers autorisés de plus haut niveau situés sous ``k`` (exclu)."""
+    end = int(store.dir_end[k])
+    return [a for a, _ in access if k < a < end]
+
+
+def subdirs(store: Store, d: int, access: tuple[tuple[int, int], ...] | None = None) -> list[dict[str, Any]]:
+    """Sous-dossiers directs (arbre repliable de l'Explorateur), triés par nom.
+
+    Compte restreint : seuls les sous-dossiers autorisés, ou menant à un dossier autorisé, sont
+    listés ; pour ces derniers, taille et nombre de fichiers ne comptent que la partie autorisée.
+    """
     aggs = store.dir_aggs()
     out = []
     for k in store.children(d):
+        size, files = int(aggs.total_size[k]), int(aggs.total_count[k])
+        if access is not None and not store.inside(k, access):
+            below = _allowed_below(store, k, access)
+            if not below:
+                continue
+            size = sum(int(aggs.total_size[a]) for a in below)
+            files = sum(int(aggs.total_count[a]) for a in below)
         out.append(
             {
                 "name": store.dir_name(k),
                 "path": store.dir_path[k],
-                "size": int(aggs.total_size[k]),
-                "files": int(aggs.total_count[k]),
+                "size": size,
+                "files": files,
                 "has_children": int(store.dir_end[k]) > k + 1,
                 "error": bool(store.dir_flags[k] & FLAG_ERROR),
             }
         )
     out.sort(key=lambda x: x["name"].lower())
     return out
+
+
+def build_tree_scoped(
+    store: Store, d: int, access: tuple[tuple[int, int], ...] | None, *, depth: int = 3, max_nodes: int = 4000
+) -> dict[str, Any] | None:
+    """Treemap limitée au périmètre d'un compte ; None si ``d`` n'est pas visible.
+
+    Pour un dossier parent de dossiers autorisés, on construit un nœud de synthèse dont les
+    enfants sont ces dossiers autorisés (nommés par leur chemin relatif) : ni les fichiers propres
+    du parent ni ses autres sous-dossiers n'y figurent.
+    """
+    if access is None or store.inside(d, access):
+        return build_tree(store, d, depth=depth, max_nodes=max_nodes)
+    below = _allowed_below(store, d, access)
+    if not below:
+        return None
+    budget = max(200, max_nodes // len(below))
+    prefix = store.dir_path[d]
+    children = []
+    for a in below:
+        child = build_tree(store, a, depth=max(0, depth - 1), max_nodes=budget)
+        child.pop("root", None)
+        rel = store.dir_path[a][len(prefix):].lstrip("/") if prefix else store.dir_path[a]
+        child["name"] = rel or child["name"]
+        children.append(child)
+    children.sort(key=lambda c: -c["size"])
+    cats: dict[str, int] = {}
+    for c in children:
+        for k, v in c["cats"].items():
+            cats[k] = cats.get(k, 0) + v
+    return {
+        "type": "dir",
+        "name": store.dir_name(d),
+        "path": prefix,
+        "root": store.roots[int(store.dir_root[d])].id,
+        "size": sum(c["size"] for c in children),
+        "files": sum(c["files"] for c in children),
+        "dirs": sum(c["dirs"] + 1 for c in children),
+        "mtime": max((c["mtime"] or 0 for c in children), default=0) or None,
+        "cats": cats,
+        "error": False,
+        "children": children,
+    }
 
 
 def find_in_tree(tree: dict[str, Any], path: str) -> dict[str, Any] | None:

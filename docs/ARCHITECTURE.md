@@ -40,7 +40,7 @@ Deviations from the original specification are listed at the end (§ 6).
 | `auth.py` | bcrypt, HMAC-signed session tokens, brute-force throttling. |
 | `i18n.py` | API messages in English/French (`ApiError`, `tr`, `lang_of`). |
 | `entrypoint.py` | Container entry point: applies `PUID`/`PGID`, then starts uvicorn. |
-| `api/*.py` | FastAPI routers (auth, files, stats, treemap, scan, config). |
+| `api/*.py` | FastAPI routers (auth, files, stats, treemap, scan, config, users). `deps.py` resolves the session into a `Principal` (username, role, allowed folders). |
 | `main.py` | Application factory, lifespan, GZip, static files. |
 
 ## 3. YAML file formats (`/cache`)
@@ -130,7 +130,14 @@ scan:
   history_size: 30
 ui: {page_size: 100}
 categories: {photo: [jpg, jpeg, ...], video: [...], ...}
-auth: {username: admin, password_hash: $2b$12$..., session_hours: 168, secret: <random>}
+auth:
+  users:
+  - {username: admin, password_hash: $2b$12$..., role: admin, all_folders: false, scopes: []}
+  - {username: alice, password_hash: $2b$12$..., role: viewer, all_folders: false,
+     scopes: [{root: photos, path: 2023}, {root: documents, path: ''}]}
+  session_hours: 168
+  secret: <random>
+# Version 1.0 stored a single account (username/password_hash): it is migrated to an admin user.
 ```
 
 ## 4. In-memory index (`Store`)
@@ -145,10 +152,15 @@ auth: {username: admin, password_hash: $2b$12$..., session_hours: 168, secret: <
   on demand then cached, for the treemap.
 * LRU caches: selection per filter, sort per (filter, sort), statistics per filter; invalidated with
   every new `Store`.
+* **Folder permissions**: a viewer's allowed folders are turned into merged folder ranges
+  (`Store.access_ranges`) stored in `FileFilter.access`; `Store.select` masks files and folders
+  outside them, so every route and cache honours them. `visible(d)` lets a viewer browse the
+  parents of an allowed folder; a folder that is neither allowed nor a parent behaves as missing.
 
 ## 5. REST API (OpenAPI: `/api/docs`)
 
 Every `/api/*` route requires a session, except `auth/state`, `auth/login` and `auth/setup`.
+Routes marked **admin** answer 403 to viewers; data routes are restricted to a viewer's folders.
 
 | Method | Route | Description |
 |---|---|---|
@@ -156,7 +168,10 @@ Every `/api/*` route requires a session, except `auth/state`, `auth/login` and `
 | GET | `/api/auth/state` | `{auth_disabled, setup_required, user}` |
 | POST | `/api/auth/setup` | Creates the initial account (only when none exists). |
 | POST | `/api/auth/login` / `/api/auth/logout` | Session through the `fev_session` cookie. |
-| POST | `/api/auth/password` | Password change. |
+| POST | `/api/auth/password` | Change one's own password. |
+| GET/POST | `/api/users` | **admin** — list / create accounts. |
+| PUT/DELETE | `/api/users/{username}` | **admin** — change role and folders / delete. |
+| POST | `/api/users/{username}/password` | **admin** — reset a viewer's password. |
 | GET | `/api/roots` | Configured and detected roots, with totals. |
 | GET | `/api/tree?root=&path=` | Direct sub-folders (collapsible tree). |
 | GET | `/api/files?root=&path=&recursive=&ext=&category=&from=&to=&date_field=&min_size=&max_size=&q=&sort=&page=&page_size=` | Paginated list. |
@@ -165,12 +180,12 @@ Every `/api/*` route requires a session, except `auth/state`, `auth/login` and `
 | GET | `/api/stats?…` | Statistics (same filters). |
 | GET | `/api/stats/history` | Evolution (scan history). |
 | GET | `/api/treemap?root=&path=&depth=` | Aggregated tree for the treemap. |
-| POST | `/api/scan` (`{"root": null\|"id"}`) | Starts a scan; 409 if one is running. |
-| POST | `/api/scan/cancel` | Cancels the running scan. |
+| POST | `/api/scan` (`{"root": null\|"id"}`) | **admin** — starts a scan; 409 if one is running. |
+| POST | `/api/scan/cancel` | **admin** — cancels the running scan. |
 | GET | `/api/scan/status` | State, last scan, next scan. |
 | GET | `/api/scan/progress` | SSE stream, `event: progress`. |
-| GET/PUT | `/api/config` | Configuration (without secrets). |
-| POST | `/api/cache/clear` | Clears the cache, then starts a scan. |
+| GET/PUT | `/api/config` | **admin** — configuration (without secrets or accounts). |
+| POST | `/api/cache/clear` | **admin** — clears the cache, then starts a scan. |
 
 Common parameters: `ext` and `category` are comma-separated lists; `from`/`to` use `YYYY-MM-DD`;
 `sort` is `name|path|ext|category|size|mtime|ctime`, prefixed with `-` for descending order; `q` is

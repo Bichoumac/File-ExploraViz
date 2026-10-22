@@ -43,7 +43,9 @@ def test_healthz_and_static(client):
 
 def test_auth_required(client):
     assert client.get("/api/files").status_code == 401
-    assert client.get("/api/auth/state").json() == {"auth_disabled": False, "setup_required": False, "user": None}
+    assert client.get("/api/auth/state").json() == {
+        "auth_disabled": False, "setup_required": False, "user": None, "role": None, "all_folders": None,
+    }
     r = client.post("/api/auth/login", json={"username": "admin", "password": "faux"})
     assert r.status_code == 401
     login(client)
@@ -175,7 +177,7 @@ def test_second_scan_is_rejected_while_running(client):
 def test_config_validation_and_save(client, settings):
     login(client)
     cfg = client.get("/api/config").json()
-    assert cfg["scan"]["interval_minutes"] == 15 and "secret" not in cfg["auth"] and "password_hash" not in cfg["auth"]
+    assert cfg["scan"]["interval_minutes"] == 15 and cfg["auth"] == {"session_hours": 168}
     r = client.put("/api/config", json={"scan": {**cfg["scan"], "interval_minutes": -5}})
     assert r.status_code == 422
     assert any("scan.interval_minutes" in e for e in r.json()["errors"])
@@ -185,7 +187,7 @@ def test_config_validation_and_save(client, settings):
     assert r.status_code == 200
     on_disk = yaml.safe_load(settings.config_file.read_text(encoding="utf-8"))
     assert on_disk["scan"]["interval_minutes"] == 60 and on_disk["ui"]["page_size"] == 50
-    assert on_disk["auth"]["password_hash"].startswith("$2")  # le haché n'est pas perdu
+    assert on_disk["auth"]["users"][0]["password_hash"].startswith("$2")  # le compte n'est pas perdu
 
 
 def test_invalid_config_file_fails_clearly(settings):

@@ -29,6 +29,7 @@ and a **WinDirStat-style treemap**. It is built for a NAS: the scan runs at low 
 
 1. [Features](#features)
 2. [Installing on TrueNAS SCALE with Dockge](#installing-on-truenas-scale-with-dockge)
+   — [Updating File ExploraViz from Dockge](#updating-file-exploraviz-from-dockge)
 3. [Standalone installation (Docker Compose)](#standalone-installation-docker-compose)
 4. [Configuration](#configuration)
 5. [Backup](#backup)
@@ -80,9 +81,14 @@ horizontally scrolling categories; touch-friendly treemap (a tap opens a sheet w
 "Explorer" actions); 16 px inputs to avoid iOS auto-zoom; notch-aware (`safe-area`). On tablets the
 columns stack.
 
+**Accounts and folder permissions**: several accounts, each either an **administrator** (settings,
+scans, accounts, every folder) or a **viewer** limited to chosen folders (sub-folders included).
+Administrators create accounts and reset viewers' passwords from **Settings → Accounts**. See
+[Accounts and folder permissions](#accounts-and-folder-permissions).
+
 **Configuration**: roots detected under `/data`, scheduling, exclusions, extension → category
-mapping (applied without rescanning), options, password and session lifetime, "clear cache and
-rescan".
+mapping (applied without rescanning), options, accounts, password and session lifetime, "clear
+cache and rescan".
 
 ---
 
@@ -93,8 +99,9 @@ Procedure for TrueNAS SCALE 24.10 ("Electric Eel") or later, which ships Docker 
 The ready-made image is pulled from GitHub (`ghcr.io/bichoumac/file-exploraviz`, amd64 and arm64):
 there is nothing to build.
 
-The examples use the pool `tank`, the datasets `tank/photos` and `tank/documents`, and UID/GID
-`3000`. **Replace them everywhere with your own values.** Commands are typed in **System → Shell**
+The examples use the pool `tank` and the datasets `tank/photos` and `tank/documents`;
+`{{ PUID - Step 1 }}` and `{{ GUID - Step 1 }}` stand for the UID and GID you write down in step 1.
+**Replace them everywhere with your own values.** Commands are typed in **System → Shell**
 (or over SSH) with the administrator account, hence `sudo`.
 
 **What we are going to set up**
@@ -108,13 +115,13 @@ The examples use the pool `tank`, the datasets `tank/photos` and `tank/documents
 ### Step 1 — Create a dedicated group and user
 
 1. **Credentials → Groups → Add**
-   * **GID**: keep the suggested value and **write it down** (here `3000`);
+   * **GID**: keep the suggested value and **write it down**: it is `{{ GUID - Step 1 }}`;
    * **Name**: `exploraviz`;
    * leave the rest as is, then **Save**.
 2. **Credentials → Users → Add** ("Local Users" on some versions)
    * **Full Name**: `File ExploraViz`, **Username**: `exploraviz`;
    * **Disable Password**: on (this account never logs in);
-   * **UID**: keep the suggested value and **write it down** (here `3000`);
+   * **UID**: keep the suggested value and **write it down**: it is `{{ PUID - Step 1 }}`;
    * **Create New Primary Group**: unchecked, then **Primary Group**: `exploraviz`;
    * **Home Directory**: `/var/empty`, **Shell**: `nologin`;
    * **SMB User**: unchecked;
@@ -122,7 +129,7 @@ The examples use the pool `tank`, the datasets `tank/photos` and `tank/documents
 3. Check in the Shell:
    ```sh
    id exploraviz
-   # uid=3000(exploraviz) gid=3000(exploraviz) groups=3000(exploraviz)
+   # uid={{ PUID - Step 1 }}(exploraviz) gid={{ GUID - Step 1 }}(exploraviz) groups={{ GUID - Step 1 }}(exploraviz)
    ```
 
 ### Step 2 — Grant read access on every dataset to analyse
@@ -174,7 +181,7 @@ making sure **Apply permissions recursively** is ticked.
 
 ```sh
 sudo mkdir -p /mnt/tank/apps/file-exploraviz/config /mnt/tank/apps/file-exploraviz/cache
-sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step 1
+sudo chown -R {{ PUID - Step 1 }}:{{ GUID - Step 1 }} /mnt/tank/apps/file-exploraviz
 ```
 
 ### Step 4 — Create the stack in Dockge
@@ -192,7 +199,7 @@ sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step
        container_name: file-exploraviz
        restart: unless-stopped
        ports:
-         - "${HOST_PORT:-8080}:8080"
+         - "${HOST_PORT:-59125}:8080"
        environment:
          PUID: ${PUID:-1000}
          PGID: ${PGID:-1000}
@@ -229,16 +236,17 @@ sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step
 
    * **One line per dataset**: `path-on-the-NAS:/data/<name>:ro`. `<name>` becomes the root name in
      the UI (it can be renamed later in **Settings**).
-   * The right-hand port (`8080`) stays as is. To publish another port, change `HOST_PORT`.
+   * The UI is published on port **59125** by default. The right-hand port (`8080`, inside the
+     container) stays as is: to publish another port, change `HOST_PORT`.
 
 4. In the **.env** editor (below the compose editor in Dockge), paste:
 
    ```ini
    FEV_TAG=latest
    APP_DATA=/mnt/tank/apps/file-exploraviz
-   PUID=3000
-   PGID=3000
-   HOST_PORT=8080
+   PUID={{ PUID - Step 1 }}
+   PGID={{ GUID - Step 1 }}
+   HOST_PORT=59125
    TZ=Europe/Paris
    ADMIN_USER=admin
    ADMIN_PASSWORD=
@@ -258,14 +266,16 @@ sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step
 5. Click **Deploy**. Dockge pulls the image (66 MB to download, about 190 MB once extracted), then the stack logs
    should show, in this order:
    ```
-   msg="exécution en tant que 3000:3000"
+   msg="exécution en tant que {{ PUID - Step 1 }}:{{ GUID - Step 1 }}"
    msg="nouvelle racine détectée" root=photos folder=photos
-   msg="File ExploraViz démarré" version=1.0.0 port=8080
+   msg="File ExploraViz démarré" version=1.1.0 port=8080
    ```
    then, about ten seconds later, `msg="scan terminé"` (the first scan starts by itself; log
    messages are in French).
-6. Open `http://<nas-ip>:8080` and create the account (or log in with `ADMIN_PASSWORD`). The
-   **FR/EN** button in the top bar switches the interface language.
+6. Open `http://<nas-ip>:59125` and create the **administrator** account (or log in with
+   `ADMIN_PASSWORD`). The **FR/EN** button in the top bar switches the interface language. Other
+   accounts are created afterwards in **Settings → Accounts**
+   (see [Accounts and folder permissions](#accounts-and-folder-permissions)).
 
 ### Step 5 — Check that everything is right
 
@@ -276,11 +286,82 @@ sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step
 * **Statistics → Inaccessible items** is 0. Otherwise the list shows the refused folders: go
   through step 2 again for them.
 
-### Updating
+### Updating File ExploraViz from Dockge
 
-In Dockge, click **Update**: it pulls the newest image for `FEV_TAG` and recreates the container.
-Settings and results are kept, since they live in `config/` and `cache/`. To free the old image:
-`sudo docker image prune -f`.
+This updates **the File ExploraViz application** (its container image) using Dockge; Dockge itself
+is not touched.
+
+**Short version:** in Dockge, open the `file-exploraviz` stack and click **Update**. Dockge
+downloads the newest File ExploraViz image and restarts the application with it; your settings and
+scan results are kept. The detailed procedure below adds a backup, a check and a way back.
+
+Settings and scan results live in `config/` and `cache/` on the NAS, outside the container, so an
+update keeps them. Dockge does not update stacks by itself: you decide when to update.
+
+**Versions.** The `FEV_TAG` line of the stack's `.env` chooses what you get:
+
+| `FEV_TAG` | You get |
+|---|---|
+| `latest` (default) | the latest release; **Update** moves you to each new release |
+| `1.0.0` (a version) | exactly that version; **Update** changes nothing until you edit the line |
+| `edge` | the current `main` branch, untested between releases (not recommended) |
+
+Available versions are listed on the [tags page](https://github.com/Bichoumac/File-ExploraViz/tags)
+of the repository.
+
+**1. Check the version currently running.** Open `http://<nas-ip>:59125/healthz`, which answers
+for example `{"status":"ok","version":"1.0.0",...}`. The same number appears in the stack logs, on
+the line `msg="File ExploraViz démarré" version=1.0.0`.
+
+**2. Back up the settings (recommended).** Only `config/` really matters: `cache/` is rebuilt by
+the next scan. If you created the dataset suggested in step 3, take a snapshot from the Shell:
+
+```sh
+sudo zfs snapshot tank/apps/file-exploraviz@before-update-$(date +%Y%m%d)
+```
+
+Otherwise copy the folder: `sudo cp -a /mnt/tank/apps/file-exploraviz/config /mnt/tank/apps/file-exploraviz/config.bak`.
+
+**3. Update.**
+* With `FEV_TAG=latest`: open the stack in Dockge and click **Update**.
+* To move to a given version: click **Edit**, set `FEV_TAG` to the new version in the `.env`
+  editor (e.g. `FEV_TAG=1.1.0`), click **Save**, then **Update**.
+
+**Update** downloads the image (`docker compose pull`), then recreates the container with it
+(`docker compose up -d`). The interface is unavailable for a few seconds, plus the time needed to
+reload the index (about 5 s per million files). Any scan in progress is interrupted and restarts at
+the next scheduled time.
+
+**4. Check.**
+* The container goes back to **healthy** in Dockge, and `/healthz` shows the new version.
+* The logs show `File ExploraViz démarré` with the new version, and no error.
+* In the browser, reload the page (**Ctrl+F5** / **Cmd+Shift+R**) so the new interface is loaded.
+  If statistics look inconsistent after a major update, use **Settings → Clear cache and rescan**.
+
+**5. Clean up.** The previous image stays on disk. To free the space:
+
+```sh
+sudo docker image prune -f
+```
+
+**If something goes wrong: roll back.**
+1. In Dockge, click **Edit** and set `FEV_TAG` to the previous version (the one noted in step 1),
+   then **Save** and **Update**.
+2. If that older version refuses to start and the logs mention an invalid `config.yaml` (a newer
+   version may have added settings it does not know — for instance going back from 1.1, which
+   stores several accounts, to 1.0), stop the stack and restore the backup from step 2, then start
+   it again:
+   ```sh
+   sudo zfs rollback tank/apps/file-exploraviz@before-update-YYYYMMDD
+   # or, without a dataset:
+   sudo rm -rf /mnt/tank/apps/file-exploraviz/config
+   sudo mv /mnt/tank/apps/file-exploraviz/config.bak /mnt/tank/apps/file-exploraviz/config
+   ```
+
+**When the compose file itself changes.** A new release may occasionally ask you to change the
+stack (a new environment variable, for instance); the README of that version then says so.
+Copy the change into Dockge with **Edit**, keep your own `volumes` lines and `.env` values, then
+**Save** and **Update**.
 
 ### Adding or removing a dataset
 
@@ -305,7 +386,7 @@ Finally, delete the `exploraviz` user and group (Credentials) and the ACL entrie
 |---|---|
 | `denied` or `unauthorized` when pulling `ghcr.io/...` | The NAS has no Internet access, or the image name/tag is mistyped. |
 | `bind source path does not exist: /mnt/...` | Wrong volume path: check it with `ls` in the Shell. |
-| `port is already allocated` | Port 8080 is used by another app: change `HOST_PORT` in the `.env`. |
+| `port is already allocated` | Port 59125 is used by another app: change `HOST_PORT` in the `.env`. |
 | The container keeps restarting | Read the logs. Usually `config/` is not owned by `PUID:PGID` (redo the `chown` of step 3), or `config.yaml` is invalid (the faulty key is named). |
 | Empty roots or "Inaccessible items" | Incomplete read rights: redo the check of step 2. |
 
@@ -343,7 +424,7 @@ docker compose up -d
 docker compose logs -f          # "File ExploraViz démarré", then "scan terminé"
 ```
 
-UI: `http://localhost:8080`. Update: `docker compose pull && docker compose up -d`.
+UI: `http://localhost:59125`. Update: `docker compose pull && docker compose up -d`.
 
 Behind a reverse proxy (Traefik, Caddy, Nginx Proxy Manager…), set `FORWARDED_ALLOW_IPS` to the
 proxy IP. The session cookie then gets the `Secure` attribute over HTTPS. If the proxy already
@@ -362,7 +443,7 @@ authenticates users, you may set `AUTH_DISABLED=true`.
 | `TZ` | `Europe/Paris` | Time zone of logs, history and the off-peak window. |
 | `FEV_TAG` | `latest` | Image tag used by `compose.yaml`: `latest` (last release), a version such as `1.0.0`, or `edge` (main branch). |
 | `APP_DATA` | `.` | Folder holding `config/` and `cache/` on the host (absolute path recommended with Dockge). |
-| `HOST_PORT` | `8080` | Port published on the host (the container listens on `PORT`, 8080 by default). |
+| `HOST_PORT` | `59125` | Port published on the host, i.e. the one you open in the browser (the container itself listens on `PORT`, 8080 by default). |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / *(empty)* | Account created **on first start only**. Empty: account creation screen in the UI. |
 | `SCAN_INTERVAL_MINUTES` | `15` | **Initial** interval (then editable in the UI; 0 = disabled). |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. In `DEBUG`, every HTTP request is logged. |
@@ -386,13 +467,48 @@ written **atomically** (temporary file, then `rename`). If `config.yaml` is inva
 refuses to start and names the faulty key, e.g. `scan.interval_minutes : nombre entier attendu`
 ("integer expected").
 
-To **reset the password**: stop the stack, delete the `username` and `password_hash` lines from
-`config/config.yaml`, then restart. The account creation screen comes back (or `ADMIN_PASSWORD`
-is applied again).
+### Accounts and folder permissions
+
+| Role | Can |
+|---|---|
+| **Administrator** | see every folder; scan; change settings; create, edit and delete accounts; reset **viewers'** passwords |
+| **Viewer** | browse (Explorer, Statistics, Treemap, CSV export) the folders it is allowed to; change its own password |
+
+**Creating an account** (administrators): **Settings → Accounts → Add account**, then choose a
+username, a password (8 characters minimum), the role and, for a viewer, either **Can see all
+folders** or a list of allowed folders. Each allowed folder is a root plus an optional sub-folder
+(e.g. `photos` + `2023/holidays`) and includes all its sub-folders; an empty path allows the whole
+root. Changes to an account apply immediately, without signing it out.
+
+**What a viewer sees.** Everything is enforced by the server, on every route:
+* only its folders: files, statistics, duplicates, largest files, extensions, treemap and CSV
+  export are computed on the allowed folders only;
+* the parent folders of an allowed folder can be browsed to reach it, but their other content is
+  hidden and their sizes only count the allowed part;
+* a folder outside its permissions answers exactly like a folder that does not exist;
+* no scan button, no global settings, no scan history of other roots, and no detail on the
+  folder being scanned.
+
+**Passwords.**
+* Anyone changes their own password in **Settings → Account**; their other sessions are signed out.
+* An administrator resets a **viewer's** password in **Settings → Accounts → Reset password**; the
+  viewer is signed out everywhere.
+* An administrator's password can only be changed by that administrator. If an administrator has
+  forgotten it, another administrator can delete the account and create it again.
+* **Only administrator locked out**: stop the stack, delete that account's entry (from
+  `- username:` to the end of its block) under `auth: users:` in `config/config.yaml`, set
+  `ADMIN_USER` (a new name) and `ADMIN_PASSWORD` in the `.env`, then start the stack: since no
+  administrator exists any more, this account is created. Then empty `ADMIN_PASSWORD` again.
+  Viewer accounts are kept.
+
+**Rules.** At least one administrator always remains, and nobody can delete their own account.
+Usernames are case-insensitive (`Alice` and `alice` are the same account).
+
+**Upgrading from 1.0.** The single account of version 1.0 automatically becomes an administrator.
 
 ### API
 
-Interactive OpenAPI documentation: `http://<host>:8080/api/docs` (once logged in).
+Interactive OpenAPI documentation: `http://<host>:59125/api/docs` (once logged in).
 Unauthenticated healthcheck: `GET /healthz`.
 
 ---
@@ -499,7 +615,7 @@ named) or a non-writable `/config` (host folder permissions).
 ```sh
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
-pytest                                           # 56 tests (scanner, filters, aggregates, security, YAML, auth, API, i18n)
+pytest                                           # 96 tests (scanner, filters, aggregates, security, YAML, auth, accounts & permissions, API, i18n)
 
 # Run locally on a test folder
 python scripts/gen_tree.py ./data/demo --files 5000
@@ -568,7 +684,8 @@ in French.
 **Interface**
 * The UI and API messages exist in **English and French only**; log messages and source comments
   are in French. Native date pickers follow the browser's language, not the app's.
-* Name search is case-insensitive but **not accent-insensitive** (`ete` does not match `été`), and
+* Name search applies to **file names only** (see [Roadmap](#roadmap), priority 1); it is
+  case-insensitive but **not accent-insensitive** (`ete` does not match `été`), and
   globs only support `*` and `?` (no `[...]` classes).
 * Sorting by name uses code-point order of the lower-cased name, not a locale-aware order.
 * CSV uses `;` as separator (French Excel default).
@@ -576,7 +693,8 @@ in French.
   Firefox 121+, Safari 16+.
 
 **Security**
-* A single administrator account, no roles, no SSO.
+* Two roles only (administrator, viewer) and no SSO/LDAP; folder permissions are per account, not
+  per group.
 * No built-in HTTPS: use a reverse proxy for remote access.
 * The brute-force counters are kept in memory and reset when the container restarts.
 * With an empty `ADMIN_PASSWORD`, the first visitor creates the account: do it right after
@@ -587,9 +705,34 @@ in French.
 ## Roadmap
 
 Ideas for future work, roughly by value for effort. Each item says *why* and gives a *how to*
-starting point. (Done since the first version: published multi-arch image, CI, English/French UI.)
+starting point. (Done since the first version: published multi-arch image, CI, English/French UI,
+accounts with folder permissions.)
 
-1. **Incremental scans**
+### Priority
+
+1. **Choose what the name filters apply to: file name or folder name**
+   *Why:* today the search box and the glob only look at **file names**. Being able to search for
+   folders (e.g. every file under any folder called `2023` or `*vacances*`) is often the quickest
+   way to narrow down a large share.
+   *How to:*
+   * **API**: add `q_scope=file|folder|path` to every filtered route (`file_filter()` in
+     `app/api/deps.py`, new field in `FileFilter`). `file` keeps today's behaviour; `folder` matches
+     folder names; `path` matches the whole relative path.
+   * **Store** (`app/store.py`): in `warm_up()`, build a second search text from the lower-cased
+     folder names, exactly like the file-name one (`"\x00".join(...)` + start offsets), and reuse
+     `glob_to_regex()`. A query gives the matching folder ids; mark their **whole subtree** with a
+     difference array (`+1` at `d`, `-1` at `dir_end[d]`, then `cumsum`), and turn that per-folder
+     mask into a per-file mask with `mask_dirs[file_dir]`. Everything stays vectorised and cached in
+     `_q_cache` with the scope in the key.
+   * **UI** (`web/assets/explorer.js`): a small *File name / Folder name / Full path* selector next
+     to the search box, stored in the URL like the other filters; add the labels to
+     `web/assets/i18n.js` in both languages.
+   * **Tests**: folder match includes sub-folders, glob on folder names, combination with the other
+     filters, `path` scope.
+
+### Later
+
+2. **Incremental scans**
    *Why:* full rescans of millions of files are slow on spinning disks.
    *How to:* store each folder's `mtime` in its index document (`app/scanner.py`,
    `IndexWriter.write_dir`). On the next scan, when a folder's `mtime` is unchanged, reuse its file
@@ -597,48 +740,42 @@ starting point. (Done since the first version: published multi-arch image, CI, E
    changes when entries are added, removed or renamed, not when a file's content or size changes,
    so keep a periodic full scan (e.g. nightly) as an option in `ScanConfig`.
 
-2. **Faster startup with a binary cache**
+3. **Faster startup with a binary cache**
    *Why:* 5 s per million files to rebuild the index from YAML.
    *How to:* after building a `Store`, save its numpy columns with `numpy.savez` next to the YAML
    (e.g. `/cache/store_<root>.npz`, plus names and folder paths) with a format version and the YAML
    `footer` timestamp. At startup, load the `.npz` when it matches the YAML; otherwise fall back to
    `load_root_part`. YAML stays the source of truth.
 
-3. **Disk usage vs apparent size**
+4. **Disk usage vs apparent size**
    *Why:* on ZFS with compression, apparent sizes overstate real usage.
    *How to:* also record `st_blocks * 512` in the scanner (one more column in the index row and in
    `RootPart`/`Store`), then add a "size on disk" toggle in the Explorer, Statistics and Treemap.
 
-4. **Real creation dates**
+5. **Real creation dates**
    *Why:* `st_ctime` is not the birth time on Linux.
    *How to:* call the `statx(2)` syscall through `ctypes` with `STATX_BTIME` in `scanner.py`
    (fall back to `st_ctime` when the filesystem does not report it), and label the column
    accordingly.
 
-5. **Content-based duplicate confirmation**
+6. **Content-based duplicate confirmation**
    *Why:* the name + size heuristic produces false positives.
    *How to:* an optional, low-priority job that, for each candidate group from
    `aggregates._duplicates`, hashes the first and last 64 KB, then the full file (BLAKE2) only for
    remaining collisions; results cached in `/cache/hashes.yaml` keyed by `(path, size, mtime)`.
    The files are opened read-only, which is compatible with the `:ro` mounts.
 
-6. **Alerts and monitoring**
+7. **Alerts and monitoring**
    *Why:* be warned when a share grows fast or inaccessible items appear.
    *How to:* expose a Prometheus `/metrics` endpoint (totals per root and per category, scan
    duration) and/or a configurable webhook (Gotify, ntfy, Discord) fired at the end of a scan in
    `ScanManager._run` when thresholds from `config.yaml` are crossed.
 
-7. **Accent-insensitive search and locale-aware sorting**
+8. **Accent-insensitive search and locale-aware sorting**
     *How to:* when building the search text in `Store.warm_up`, normalise names with
     `unicodedata.normalize("NFKD", …)` and strip combining marks (`unicodedata.combining`), and
     apply the same normalisation to `q`; for sorting, build the name rank from those normalised
     names.
-
-8. **Multiple users and read-only roles, or SSO**
-    *How to:* turn `AuthConfig` into a list of users with a `role` field (`admin` / `viewer`),
-    check the role in a dependency used by mutating routes (`/api/scan`, `/api/config`,
-    `/api/cache/clear`); or delegate to an OIDC provider (Authelia, Authentik) via the reverse
-    proxy and `AUTH_DISABLED=true`.
 
 9. **Per-root schedules**
     *How to:* add an optional `interval_minutes` to `RootConfig`, let `Scheduler.compute_next`
@@ -685,6 +822,12 @@ Choices made outside, or on top of, the original specification:
     stream and CSV downloads. Errors also carry a stable `code` field.
 13. **Release tags**: `latest` follows tagged releases and `edge` follows `main`, so a Dockge
     **Update** never picks up unreleased work by accident.
+14. **Folder permissions are enforced inside the index**: each allowed folder is a contiguous range
+    of folders and files, so a viewer's permissions become one more filter of every query (and part
+    of every cache key) rather than a check scattered across routes. A forbidden folder answers like
+    a missing one, so its existence is not revealed.
+15. **Administrators cannot reset other administrators' passwords**, as requested for "normal"
+    accounts only; recovery goes through account deletion or `ADMIN_USER`/`ADMIN_PASSWORD`.
 
 ## License
 
