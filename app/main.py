@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -21,6 +21,7 @@ from .api import scan as scan_routes
 from .api.deps import Context
 from .auth import LoginThrottle, hash_password
 from .config import ConfigError, ConfigManager
+from .i18n import ApiError, lang_of, tr
 from .scan_manager import AppState, ScanManager
 from .scheduler import Scheduler
 from .settings import Settings
@@ -107,6 +108,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             h.setdefault("Cache-Control", "no-cache")  # revalidation par ETag / Last-Modified
         return response
+
+    @app.exception_handler(ApiError)
+    async def api_error(request: Request, exc: ApiError) -> JSONResponse:
+        """Traduit le message d'erreur dans la langue de l'utilisateur (cookie fev_lang)."""
+        detail = tr(exc.key, lang_of(request), **exc.params)
+        return JSONResponse({"detail": detail, "code": exc.key}, status_code=exc.status_code, headers=exc.headers)
 
     @app.get("/healthz", tags=["système"], summary="Healthcheck")
     def healthz() -> dict:

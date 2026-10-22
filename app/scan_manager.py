@@ -22,6 +22,7 @@ from .scanner import ScanCancelled, ScanOptions, ScanProgress, scan_root
 from .settings import Settings
 from .store import FileFilter, RootPart, Store, load_root_part
 from .summary import SummaryStore, build_summary, history_point, prime_stats
+from .i18n import DEFAULT_LANG, tr
 from .timeutil import iso, parse_iso
 
 log = logging.getLogger("scan")
@@ -77,7 +78,7 @@ class ScanManager:
         self._thread: threading.Thread | None = None
         self.progress = ScanProgress()
         self.listeners: list[Callable[[], None]] = []
-        self.info: dict[str, Any] = {"status": "idle", "message": None}
+        self.info: dict[str, Any] = {"status": "idle", "message_key": None}
         self.started_ts: float | None = None
         self.expected_files: int | None = None
         self.version = 0  # incrémenté à chaque changement d'état (pour le flux SSE)
@@ -99,7 +100,11 @@ class ScanManager:
         self.info.update(kw)
         self.version += 1
 
-    def status(self) -> dict[str, Any]:
+    def _say(self, key: str | None, **params: Any) -> None:
+        """Message d'état désigné par une clé de app/i18n.py, traduit dans status()."""
+        self._set(message_key=key, message_params=params)
+
+    def status(self, lang: str = DEFAULT_LANG) -> dict[str, Any]:
         p = self.progress
         now = time.time()
         elapsed = (now - self.started_ts) if (self.started_ts and self.running) else self.info.get("duration_s")
@@ -112,8 +117,11 @@ class ScanManager:
         elif self.info.get("status") == "done":
             percent, basis = 100.0, "done"
         summary = self.state.summary or {}
+        info = {k: v for k, v in self.info.items() if k not in ("message_key", "message_params")}
+        key = self.info.get("message_key")
         return {
-            **self.info,
+            **info,
+            "message": tr(key, lang, **(self.info.get("message_params") or {})) if key else None,
             "running": self.running,
             "files": p.files,
             "dirs": p.dirs,
@@ -134,10 +142,11 @@ class ScanManager:
     # ----------------------------------------------------------------- commandes
 
     def start(self, root_ids: list[str] | None = None, trigger: str = "manuel") -> tuple[bool, str]:
+        """Lance un scan. Renvoie (lancé ?, clé du message dans app/i18n.py)."""
         if not self.state.index_ready.is_set():
-            return False, "Chargement de l'index en cours : réessayez dans un instant."
+            return False, "index_loading_retry"
         if not self._lock.acquire(blocking=False):
-            return False, "Un scan est déjà en cours : la demande est ignorée."
+            return False, "scan_already_running"
         try:
             self.cfg.sync_roots()
             roots = [
@@ -147,8 +156,8 @@ class ScanManager:
             if not roots:
                 self._lock.release()
                 if root_ids:
-                    return False, "Racine inconnue, désactivée ou absente de /data."
-                return False, "Aucune racine active à scanner (montez des dossiers sous /data)."
+                    return False, "root_unavailable"
+                return False, "no_roots"
             prev = (self.state.summary or {}).get("roots") or {}
             expected = [prev.get(r.id, {}).get("files") for r in roots]
             self.expected_files = sum(expected) if all(e is not None for e in expected) and sum(expected) else None
@@ -157,11 +166,12 @@ class ScanManager:
             self.started_ts = time.time()
             self._set(
                 status="running", phase="scan", trigger=trigger, roots=[r.id for r in roots],
-                started_at=iso(self.started_ts), finished_at=None, duration_s=None, message=None,
+                started_at=iso(self.started_ts), finished_at=None, duration_s=None,
             )
+            self._say(None)
             self._thread = threading.Thread(target=self._run, args=(roots, trigger), name="scan", daemon=True)
             self._thread.start()
-            return True, "Scan lancé."
+            return True, "scan_started"
         except BaseException:
             self._lock.release()  # le thread n'a pas pu démarrer
             raise
@@ -170,7 +180,8 @@ class ScanManager:
         if not self.running:
             return False
         self._cancel.set()
-        self._set(status="cancelling", message="Annulation en cours…")
+        self._set(status="cancelling")
+        self._say("cancelling")
         return True
 
     def wait(self, timeout: float | None = None) -> None:
@@ -250,7 +261,7 @@ class ScanManager:
                     parts.append(part)
             store = self._build(parts)
 
-            self._set(phase="agrégats")
+            self._set(phase="aggregates")
             finished = time.time()
             scan_info = {
                 "started_at": iso(self.started_ts),
@@ -264,16 +275,17 @@ class ScanManager:
             self.summaries.save(summary, self.cfg.config.scan.history_size)
             self.state.history = (self.state.history + [history_point(summary)])[-max(1, self.cfg.config.scan.history_size):]
             self.state.swap(store, summary)
-            self._set(status="done", phase=None, finished_at=scan_info["finished_at"], duration_s=scan_info["duration_s"],
-                      message=f"Scan terminé : {store.nfiles} fichiers indexés.")
+            self._set(status="done", phase=None, finished_at=scan_info["finished_at"], duration_s=scan_info["duration_s"])
+            self._say("scan_done", n=store.nfiles)
             log.info("scan terminé", extra={"files": store.nfiles, "duration_s": scan_info["duration_s"], "trigger": trigger})
         except ScanCancelled:
-            self._set(status="cancelled", phase=None, finished_at=iso(), duration_s=round(time.time() - (self.started_ts or 0), 1),
-                      message="Scan annulé : les résultats précédents sont conservés.")
+            self._set(status="cancelled", phase=None, finished_at=iso(), duration_s=round(time.time() - (self.started_ts or 0), 1))
+            self._say("scan_cancelled")
             log.info("scan annulé")
         except Exception as exc:
             log.exception("échec du scan")
-            self._set(status="error", phase=None, finished_at=iso(), message=f"Erreur pendant le scan : {exc}")
+            self._set(status="error", phase=None, finished_at=iso())
+            self._say("scan_error", error=str(exc))
         finally:
             self._lock.release()
             self.version += 1

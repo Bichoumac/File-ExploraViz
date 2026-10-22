@@ -167,6 +167,7 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .icon-btn svg.i { width: 18px; height: 18px; }
+.lang-btn { font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .04em; }
 
 input, select, textarea {
   font: inherit; color: var(--text);

@@ -1,17 +1,26 @@
 // Page Statistiques : tuiles, graphiques ECharts (chargés à la demande) et tableaux.
 import {
-  CAT, api, catColor, cssVar, esc, fmtBytes, fmtDate, fmtDateTime, fmtInt, hashFor, isMobile, loadScript, pct, pickFilters, toast,
+  CAT, api, catColor, cssVar, esc, fmtBytes, fmtDate, fmtDateTime, fmtInt, fmtPct, hashFor, isMobile, loadScript, pct, pickFilters, t, toast,
+  unitLabel,
 } from './util.js';
 
 const ECHARTS = '/vendor/echarts-5.6.0.min.js';
 let el; let P = {}; let data = null; let history = []; let roots = [];
 const charts = new Map();
 const mode = { cats: 'bytes', exts: 'bytes', sizes: 'files', years: 'bytes' };
+
+/** Libellés des tranches de taille (même ordre que app/aggregates.py), dans la langue choisie. */
+function sizeLabels() {
+  const u = unitLabel;
+  return [`0 ${u('B')}`, `< 1 ${u('K')}`, `1–10 ${u('K')}`, `10–100 ${u('K')}`, `100 ${u('K')}–1 ${u('M')}`, `1–10 ${u('M')}`,
+    `10–100 ${u('M')}`, `100 ${u('M')}–1 ${u('G')}`, `1–10 ${u('G')}`, `10–100 ${u('G')}`, `≥ 100 ${u('G')}`];
+}
+const ageLabel = (i) => t(`st.age.${i}`);
 let ctrl = null;
 
 export async function mount(container, params) {
   el = container;
-  el.innerHTML = '<div class="empty">Chargement des statistiques…</div>';
+  el.innerHTML = `<div class="empty">${t('st.loading')}</div>`;
   window.addEventListener('resize', onResize);
   window.addEventListener('theme-changed', renderCharts);
   window.addEventListener('data-changed', reload);
@@ -81,13 +90,13 @@ function filterChips() {
   const f = pickFilters(P);
   const chips = [];
   const r = roots.find((x) => x.id === f.root);
-  chips.push(r ? `Racine : ${r.name}${f.path ? ` › ${f.path}` : ''}` : 'Toutes les racines');
-  if (f.recursive === '0') chips.push('Sans les sous-dossiers');
-  if (f.category) chips.push(`Catégories : ${f.category.split(',').map((c) => CAT[c]?.label || c).join(', ')}`);
-  if (f.ext) chips.push(`Extensions : ${f.ext}`);
-  if (f.from || f.to) chips.push(`${f.date_field === 'ctime' ? 'Création' : 'Modification'} : ${f.from || '…'} → ${f.to || '…'}`);
-  if (f.min_size || f.max_size) chips.push(`Taille : ${f.min_size ? fmtBytes(+f.min_size) : '0'} → ${f.max_size ? fmtBytes(+f.max_size) : '∞'}`);
-  if (f.q) chips.push(`Nom : ${f.q}`);
+  chips.push(r ? t('st.chip.root', { name: `${r.name}${f.path ? ` › ${f.path}` : ''}` }) : t('ex.allRoots'));
+  if (f.recursive === '0') chips.push(t('st.chip.noSub'));
+  if (f.category) chips.push(t('st.chip.cats', { list: f.category.split(',').map((c) => CAT[c]?.label || c).join(', ') }));
+  if (f.ext) chips.push(t('st.chip.exts', { list: f.ext }));
+  if (f.from || f.to) chips.push(t(f.date_field === 'ctime' ? 'st.chip.created' : 'st.chip.modified', { from: f.from || '…', to: f.to || '…' }));
+  if (f.min_size || f.max_size) chips.push(t('st.chip.size', { min: f.min_size ? fmtBytes(+f.min_size) : '0', max: f.max_size ? fmtBytes(+f.max_size) : '∞' }));
+  if (f.q) chips.push(t('st.chip.name', { q: f.q }));
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
 
@@ -98,53 +107,53 @@ function tile(label, value, sub = '') {
 function render() {
   disposeCharts();
   const d = data;
-  const t = d.totals;
+  const tot = d.totals;
   const dup = d.duplicates || { groups: 0, files: 0, recoverable_bytes: 0, top: [] };
-  const rootOpts = `<option value="">Toutes les racines</option>${roots.filter((r) => r.indexed)
+  const rootOpts = `<option value="">${t('ex.allRoots')}</option>${roots.filter((r) => r.indexed)
     .map((r) => `<option value="${esc(r.id)}" ${r.id === P.root ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}`;
   el.innerHTML = `
     <div class="stats-head">
       <div class="chips">${filterChips()}</div>
       <div class="row" style="display:flex;gap:8px;align-items:center">
-        <select id="s-root" aria-label="Racine">${rootOpts}</select>
-        <a class="btn" href="${esc(hashFor('explorer', P))}">Modifier les filtres</a>
+        <select id="s-root" aria-label="${t('ex.root')}">${rootOpts}</select>
+        <a class="btn" href="${esc(hashFor('explorer', P))}">${t('st.editFilters')}</a>
       </div>
     </div>
-    ${d.source === 'summary' ? '<p class="help">Agrégats pré-calculés du dernier scan (index encore en chargement).</p>' : ''}
+    ${d.source === 'summary' ? `<p class="help">${t('st.precomputed')}</p>` : ''}
     <div class="tiles">
-      ${tile('Fichiers', fmtInt(t.files), `${fmtInt(t.dirs)} dossiers`)}
-      ${tile('Volume total', fmtBytes(t.bytes), t.extensions != null ? `${fmtInt(t.extensions)} extensions distinctes` : '')}
-      ${tile('Taille moyenne', fmtBytes(t.mean_size), `médiane ${fmtBytes(t.median_size)}`)}
-      ${tile('Doublons probables', fmtInt(dup.files), `${fmtBytes(dup.recoverable_bytes)} récupérables`)}
-      ${tile('Fichiers vides', fmtInt(t.empty_files), pct(t.empty_files, t.files))}
-      ${tile('Dossiers vides', fmtInt(d.empty_dirs?.count))}
-      ${tile('Éléments inaccessibles', fmtInt(d.inaccessible?.count), d.truncated_dirs ? `${fmtInt(d.truncated_dirs)} dossiers tronqués (profondeur max)` : '')}
-      ${tile('Fichiers cachés', fmtInt(t.hidden_files), 'nom commençant par « . »')}
-      ${tile('Plus ancien', fmtDate(t.oldest_mtime), `plus récent : ${fmtDate(t.newest_mtime)}`)}
-      ${t.future_mtime ? tile('Dates dans le futur', fmtInt(t.future_mtime), 'horloge ou métadonnées suspectes') : ''}
-      ${tile('Profondeur max', fmtInt(t.max_depth), 'niveaux sous le dossier choisi')}
+      ${tile(t('st.t.files'), fmtInt(tot.files), t('st.t.dirs', { n: fmtInt(tot.dirs), count: tot.dirs }))}
+      ${tile(t('st.t.volume'), fmtBytes(tot.bytes), tot.extensions != null ? t('st.t.exts', { n: fmtInt(tot.extensions), count: tot.extensions }) : '')}
+      ${tile(t('st.t.mean'), fmtBytes(tot.mean_size), t('st.t.median', { v: fmtBytes(tot.median_size) }))}
+      ${tile(t('st.t.dups'), fmtInt(dup.files), t('st.t.recoverable', { v: fmtBytes(dup.recoverable_bytes) }))}
+      ${tile(t('st.t.emptyFiles'), fmtInt(tot.empty_files), pct(tot.empty_files, tot.files))}
+      ${tile(t('st.t.emptyDirs'), fmtInt(d.empty_dirs?.count))}
+      ${tile(t('st.t.inacc'), fmtInt(d.inaccessible?.count), d.truncated_dirs ? t('st.t.truncated', { n: fmtInt(d.truncated_dirs), count: d.truncated_dirs }) : '')}
+      ${tile(t('st.t.hidden'), fmtInt(tot.hidden_files), t('st.t.hiddenSub'))}
+      ${tile(t('st.t.oldest'), fmtDate(tot.oldest_mtime), t('st.t.newest', { d: fmtDate(tot.newest_mtime) }))}
+      ${tot.future_mtime ? tile(t('st.t.future'), fmtInt(tot.future_mtime), t('st.t.futureSub')) : ''}
+      ${tile(t('st.t.depth'), fmtInt(tot.max_depth), t('st.t.depthSub'))}
     </div>
     <div class="sgrid">
-      <div class="card"><div class="card-h"><h2>Répartition par catégorie</h2>${seg('cats', 'Volume', 'Nombre')}</div><div class="card-b"><div class="chart" id="c-cats"></div></div></div>
-      <div class="card"><div class="card-h"><h2>Top 20 extensions</h2>${seg('exts', 'Volume', 'Nombre')}</div><div class="card-b"><div class="chart tall" id="c-exts"></div></div></div>
-      <div class="card"><div class="card-h"><h2>Distribution des tailles</h2>${seg('sizes', 'Volume', 'Nombre')}</div><div class="card-b"><div class="chart" id="c-sizes"></div></div></div>
-      <div class="card"><div class="card-h"><h2>Année de modification</h2>${seg('years', 'Volume', 'Nombre')}</div><div class="card-b"><div class="chart" id="c-years"></div></div></div>
-      <div class="card"><div class="card-h"><h2>Ancienneté (dernière modification)</h2></div><div class="card-b"><div class="chart" id="c-age"></div></div></div>
-      <div class="card"><div class="card-h"><h2>Évolution dans le temps</h2><span class="muted small">${fmtInt(history.length)} scan(s) en historique · toutes racines</span></div>
-        <div class="card-b"><h3>Volume total</h3><div class="chart" style="height:150px" id="c-hist-bytes"></div><h3>Nombre de fichiers</h3><div class="chart" style="height:150px" id="c-hist-files"></div></div></div>
-      ${tableCard('Top 50 des plus gros fichiers', ['Fichier', 'Taille', 'Modifié'], (d.largest_files || []).map((f) => [
+      <div class="card"><div class="card-h"><h2>${t('st.c.cats')}</h2>${seg('cats', t('st.volume'), t('st.count'))}</div><div class="card-b"><div class="chart" id="c-cats"></div></div></div>
+      <div class="card"><div class="card-h"><h2>${t('st.c.exts')}</h2>${seg('exts', t('st.volume'), t('st.count'))}</div><div class="card-b"><div class="chart tall" id="c-exts"></div></div></div>
+      <div class="card"><div class="card-h"><h2>${t('st.c.sizes')}</h2>${seg('sizes', t('st.volume'), t('st.count'))}</div><div class="card-b"><div class="chart" id="c-sizes"></div></div></div>
+      <div class="card"><div class="card-h"><h2>${t('st.c.years')}</h2>${seg('years', t('st.volume'), t('st.count'))}</div><div class="card-b"><div class="chart" id="c-years"></div></div></div>
+      <div class="card"><div class="card-h"><h2>${t('st.c.age')}</h2></div><div class="card-b"><div class="chart" id="c-age"></div></div></div>
+      <div class="card"><div class="card-h"><h2>${t('st.c.hist')}</h2><span class="muted small">${t('st.c.histSub', { n: fmtInt(history.length), count: history.length })}</span></div>
+        <div class="card-b"><h3>${t('st.t.volume')}</h3><div class="chart" style="height:150px" id="c-hist-bytes"></div><h3>${t('st.c.histFiles')}</h3><div class="chart" style="height:150px" id="c-hist-files"></div></div></div>
+      ${tableCard(t('st.tb.files'), [t('st.h.file'), t('ex.col.size'), t('ex.col.mtime')], (d.largest_files || []).map((f) => [
         `<span class="dot" style="background:${catColor(f.category)}"></span> ${esc(f.name)}<div class="small muted path">${esc(f.root)} › ${esc(f.path)}</div>`,
         fmtBytes(f.size), fmtDate(f.mtime)]), 'wide')}
-      ${tableCard('Top 20 des plus gros dossiers (fichiers directs)', ['Dossier', 'Fichiers', 'Taille directe', 'Taille totale'], (d.largest_dirs || []).map((x) => [
+      ${tableCard(t('st.tb.dirs'), [t('st.h.dir'), t('st.h.files'), t('st.h.direct'), t('st.h.total')], (d.largest_dirs || []).map((x) => [
         dirLink(x), fmtInt(x.files), fmtBytes(x.bytes), fmtBytes(x.total_bytes)]))}
-      ${tableCard('Dossiers les plus peuplés', ['Dossier', 'Fichiers', 'Taille directe'], (d.busiest_dirs || []).map((x) => [dirLink(x), fmtInt(x.files), fmtBytes(x.bytes)]))}
-      ${tableCard(`Doublons probables (même nom, même taille) — ${fmtInt(dup.groups)} groupes, ${fmtBytes(dup.recoverable_bytes)} récupérables`,
-        ['Nom', 'Exemplaires', 'Taille unitaire', 'Récupérable'], dup.top.map((g) => [
-          `${esc(g.name)}<details class="more"><summary>Emplacements</summary>${g.paths.map((p) => `<div class="small path">${esc(p.root)} › ${esc(p.path)}</div>`).join('')}</details>`,
+      ${tableCard(t('st.tb.busy'), [t('st.h.dir'), t('st.h.files'), t('st.h.direct')], (d.busiest_dirs || []).map((x) => [dirLink(x), fmtInt(x.files), fmtBytes(x.bytes)]))}
+      ${tableCard(t('st.tb.dups', { groups: fmtInt(dup.groups), v: fmtBytes(dup.recoverable_bytes) }),
+        [t('ex.col.name'), t('st.h.copies'), t('st.h.unit'), t('st.h.recoverable')], dup.top.map((g) => [
+          `${esc(g.name)}<details class="more"><summary>${t('st.h.locations')}</summary>${g.paths.map((p) => `<div class="small path">${esc(p.root)} › ${esc(p.path)}</div>`).join('')}</details>`,
           fmtInt(g.count), fmtBytes(g.size), fmtBytes(g.recoverable_bytes)]), 'wide')}
-      ${tableCard(`Dossiers vides (${fmtInt(d.empty_dirs?.count)})`, ['Dossier'], (d.empty_dirs?.sample || []).map((x) => [dirLink(x)]))}
-      ${tableCard(`Éléments inaccessibles (${fmtInt(d.inaccessible?.count)})`, ['Élément', 'Erreur'], (d.inaccessible?.sample || []).map((x) => [
-        `${x.kind === 'dir' ? 'Dossier' : 'Fichier'} : ${esc(x.root)} › ${esc(x.path || '/')}`, esc(x.error)]))}
+      ${tableCard(t('st.tb.empty', { n: fmtInt(d.empty_dirs?.count) }), [t('st.h.dir')], (d.empty_dirs?.sample || []).map((x) => [dirLink(x)]))}
+      ${tableCard(t('st.tb.inacc', { n: fmtInt(d.inaccessible?.count) }), [t('st.h.item'), t('st.h.error')], (d.inaccessible?.sample || []).map((x) => [
+        `${x.kind === 'dir' ? t('st.kind.dir') : t('st.kind.file')} : ${esc(x.root)} › ${esc(x.path || '/')}`, esc(x.error)]))}
     </div>`;
 
   el.querySelector('#s-root').addEventListener('change', (e) => {
@@ -169,7 +178,7 @@ function tableCard(title, heads, body, cls = '') {
   const content = body.length
     ? `<div class="scrollbox"><table class="data"><thead><tr>${heads.map((h, i) => `<th class="${i ? 'num' : ''}">${h}</th>`).join('')}</tr></thead>
         <tbody>${body.map((r) => `<tr>${r.map((c, i) => `<td class="${i ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty small">Rien à signaler.</div>';
+    : `<div class="empty small">${t('st.nothing')}</div>`;
   return `<div class="card ${cls}"><div class="card-h"><h2>${title}</h2></div><div class="card-b">${content}</div></div>`;
 }
 
@@ -215,12 +224,12 @@ function renderCharts() {
   const center = mob ? ['50%', '42%'] : ['36%', '50%'];
   chart('c-cats')?.setOption({
     textStyle: font,
-    tooltip: { ...th.tooltip, trigger: 'item', confine: true, formatter: (p) => `<b>${esc(p.name)}</b><br>${mc.f(p.value)} · ${p.percent.toLocaleString('fr-FR')} %` },
+    tooltip: { ...th.tooltip, trigger: 'item', confine: true, formatter: (p) => `<b>${esc(p.name)}</b><br>${mc.f(p.value)} · ${fmtPct(p.percent)}` },
     legend: { type: 'scroll', ...legendPos, textStyle: { color: th.text2, fontSize: 12 }, icon: 'roundRect', itemWidth: 10, itemHeight: 10 },
     series: [{
       type: 'pie', radius: mob ? ['40%', '60%'] : ['52%', '76%'], center, avoidLabelOverlap: true,
       itemStyle: { borderColor: th.surface, borderWidth: 2, borderRadius: 4 },
-      label: { color: th.text2, fontSize: 11, formatter: (p) => (p.percent >= 6 ? `${p.percent.toFixed(0)} %` : '') },
+      label: { color: th.text2, fontSize: 11, formatter: (p) => (p.percent >= 6 ? fmtPct(p.percent, 0) : '') },
       labelLine: { show: false },
       data: cats.map((c) => ({ name: CAT[c.id].label, value: c[mc.k], itemStyle: { color: catColor(c.id) } })),
     }],
@@ -234,7 +243,7 @@ function renderCharts() {
   chart('c-exts')?.setOption({
     textStyle: font,
     grid: { left: 70, right: 80, top: 6, bottom: 20 },
-    tooltip: { ...th.tooltip, trigger: 'item', confine: true, formatter: (p) => { const x = rev[p.dataIndex]; return `<b>.${esc(x.ext)}</b> — ${esc(CAT[x.category]?.label || '')}<br>${fmtInt(x.files)} fichiers · ${fmtBytes(x.bytes)}`; } },
+    tooltip: { ...th.tooltip, trigger: 'item', confine: true, formatter: (p) => { const x = rev[p.dataIndex]; return `<b>.${esc(x.ext)}</b> — ${esc(CAT[x.category]?.label || '')}<br>${t('st.nFiles', { n: fmtInt(x.files), count: x.files })} · ${fmtBytes(x.bytes)}`; } },
     xAxis: { type: 'value', ...th.axis({ axisLabel: { color: th.muted, fontSize: 11, formatter: (v) => me.f(v) } }) },
     yAxis: { type: 'category', data: rev.map((x) => `.${x.ext}`), ...th.axis({ splitLine: { show: false } }) },
     series: [{
@@ -247,19 +256,20 @@ function renderCharts() {
   // Histogramme des tailles (tranches logarithmiques)
   const ms = metric('sizes');
   const hist = data.size_histogram || [];
-  barChart('c-sizes', hist.map((b) => b.label), hist.map((b) => b[ms.k]), ms.f, th, font,
-    (i) => `<b>${esc(hist[i].label)}</b><br>${fmtInt(hist[i].files)} fichiers · ${fmtBytes(hist[i].bytes)}`);
+  const sl = sizeLabels();
+  barChart('c-sizes', hist.map((b, i) => sl[i] || b.label), hist.map((b) => b[ms.k]), ms.f, th, font,
+    (i) => `<b>${esc(sl[i] || hist[i].label)}</b><br>${t('st.nFiles', { n: fmtInt(hist[i].files), count: hist[i].files })} · ${fmtBytes(hist[i].bytes)}`);
 
   // Années
   const my = metric('years');
   const years = data.years || [];
   barChart('c-years', years.map((y) => String(y.year)), years.map((y) => y[my.k]), my.f, th, font,
-    (i) => `<b>${years[i].year}</b><br>${fmtInt(years[i].files)} fichiers · ${fmtBytes(years[i].bytes)}`);
+    (i) => `<b>${years[i].year}</b><br>${t('st.nFiles', { n: fmtInt(years[i].files), count: years[i].files })} · ${fmtBytes(years[i].bytes)}`);
 
   // Ancienneté
   const age = data.age || [];
-  barChart('c-age', age.map((a) => a.label), age.map((a) => a.bytes), fmtBytes, th, font,
-    (i) => `<b>${esc(age[i].label)}</b><br>${fmtInt(age[i].files)} fichiers · ${fmtBytes(age[i].bytes)}`);
+  barChart('c-age', age.map((a, i) => ageLabel(i)), age.map((a) => a.bytes), fmtBytes, th, font,
+    (i) => `<b>${esc(ageLabel(i))}</b><br>${t('st.nFiles', { n: fmtInt(age[i].files), count: age[i].files })} · ${fmtBytes(age[i].bytes)}`);
 
   // Évolution : deux graphiques distincts (jamais de double axe)
   lineChart('c-hist-bytes', history.map((h) => h.date), history.map((h) => h.bytes), fmtBytes, th, font);
@@ -281,7 +291,7 @@ function lineChart(id, dates, values, fmt, th, font) {
   const c = chart(id);
   if (!c) return;
   if (dates.length < 2) {
-    c.setOption({ graphic: [{ type: 'text', left: 'center', top: 'middle', style: { text: 'Historique insuffisant (au moins 2 scans)', fill: th.muted, fontSize: 12 } }] }, true);
+    c.setOption({ graphic: [{ type: 'text', left: 'center', top: 'middle', style: { text: t('st.histEmpty'), fill: th.muted, fontSize: 12 } }] }, true);
     return;
   }
   c.setOption({

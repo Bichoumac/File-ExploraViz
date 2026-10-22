@@ -1,18 +1,10 @@
-// Utilitaires partagés : API, formats (fr-FR), catégories, icônes, état d'URL.
+// Utilitaires partagés : API, formats (selon la langue), catégories, icônes, état d'URL.
+import { lang, locale, t } from './i18n.js';
 
-export const CATS = [
-  { id: 'photo', label: 'Photos', icon: 'photo' },
-  { id: 'video', label: 'Vidéos', icon: 'video' },
-  { id: 'audio', label: 'Audio', icon: 'audio' },
-  { id: 'document', label: 'Documents texte', icon: 'document' },
-  { id: 'spreadsheet', label: 'Classeurs', icon: 'spreadsheet' },
-  { id: 'presentation', label: 'Présentations', icon: 'presentation' },
-  { id: 'pdf', label: 'PDF', icon: 'pdf' },
-  { id: 'archive', label: 'Archives', icon: 'archive' },
-  { id: 'code', label: 'Code', icon: 'code' },
-  { id: 'executable', label: 'Exécutables/Images disque', icon: 'executable' },
-  { id: 'other', label: 'Autres', icon: 'other' },
-];
+export { t };
+
+export const CATS = ['photo', 'video', 'audio', 'document', 'spreadsheet', 'presentation', 'pdf', 'archive', 'code', 'executable', 'other']
+  .map((id) => ({ id, label: t(`cat.${id}`), icon: id }));
 export const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
 
 const FILE = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>';
@@ -59,29 +51,32 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 /** Échappement HTML : obligatoire pour tout nom de fichier injecté dans un gabarit. */
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
 
-const NF = new Intl.NumberFormat('fr-FR');
+const NF = new Intl.NumberFormat(locale);
 export const fmtInt = (n) => (n == null ? '—' : NF.format(n));
+export const fmtNum = (n, digits = 1) => Number(n).toLocaleString(locale, { maximumFractionDigits: digits });
 
-const UNITS = ['o', 'Ko', 'Mo', 'Go', 'To', 'Po'];
+/** Unités de taille : clés neutres, libellés selon la langue (Ko/Mo… ou KB/MB…). */
+const UNIT_KEYS = ['B', 'K', 'M', 'G', 'T', 'P'];
+export const unitLabel = (k) => t(`unit.${k}`);
 export function fmtBytes(n) {
   if (n == null || Number.isNaN(n)) return '—';
   let v = Number(n);
   let i = 0;
-  while (Math.abs(v) >= 1024 && i < UNITS.length - 1) { v /= 1024; i += 1; }
+  while (Math.abs(v) >= 1024 && i < UNIT_KEYS.length - 1) { v /= 1024; i += 1; }
   const digits = i === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0;
-  return `${v.toLocaleString('fr-FR', { maximumFractionDigits: digits })} ${UNITS[i]}`;
+  return `${v.toLocaleString(locale, { maximumFractionDigits: digits })} ${unitLabel(UNIT_KEYS[i])}`;
 }
-export const UNIT_FACTORS = { o: 1, Ko: 1024, Mo: 1024 ** 2, Go: 1024 ** 3, To: 1024 ** 4 };
+export const UNIT_FACTORS = { B: 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
 
 export function fmtDate(ts) {
   if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleDateString('fr-FR', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return new Date(ts * 1000).toLocaleDateString(locale, { year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 export function fmtDateTime(value) {
   if (!value) return '—';
   const d = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+  return d.toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
 }
 export function fmtDuration(s) {
   if (s == null) return '—';
@@ -91,7 +86,9 @@ export function fmtDuration(s) {
   if (m < 60) return `${m} min ${String(s % 60).padStart(2, '0')} s`;
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
 }
-export const pct = (part, total) => (total ? `${((100 * part) / total).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %` : '—');
+/** Pourcentage typographié selon la langue : « 12,5 % » ou « 12.5% ». */
+export const fmtPct = (value, digits = 1) => `${Number(value).toLocaleString(locale, { maximumFractionDigits: digits })}${lang === 'fr' ? ' %' : '%'}`;
+export const pct = (part, total) => (total ? fmtPct((100 * part) / total) : '—');
 
 // ---------------------------------------------------------------- API
 
@@ -121,7 +118,7 @@ export async function api(path, { method = 'GET', body, params, signal } = {}) {
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new CustomEvent('auth-required'));
     const detail = data && (typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join(' ; ') : null);
-    throw new ApiError(res.status, detail || `Erreur ${res.status}`, data);
+    throw new ApiError(res.status, detail || t('common.httpError', { status: res.status }), data);
   }
   return data;
 }
@@ -179,19 +176,19 @@ export function loadScript(src) {
       const s = document.createElement('script');
       s.src = src;
       s.onload = resolve;
-      s.onerror = () => reject(new Error(`Impossible de charger ${src}`));
+      s.onerror = () => reject(new Error(t('common.loadFailed', { src })));
       document.head.appendChild(s);
     });
   }
   return loaded[src];
 }
 
-/** Ordre de grandeur lisible pour une taille saisie (min/max) : 1572864 → [1.5, 'Mo']. */
+/** Ordre de grandeur lisible pour une taille saisie (min/max) : 1572864 → [1.5, 'M']. */
 export function splitSize(bytes) {
-  if (bytes === undefined || bytes === null || bytes === '') return ['', 'Mo'];
+  if (bytes === undefined || bytes === null || bytes === '') return ['', 'M'];
   const n = Number(bytes);
-  for (const u of ['To', 'Go', 'Mo', 'Ko']) {
+  for (const u of ['T', 'G', 'M', 'K']) {
     if (n >= UNIT_FACTORS[u] && n % (UNIT_FACTORS[u] / 100) === 0) return [String(+(n / UNIT_FACTORS[u]).toFixed(2)), u];
   }
-  return [String(n), 'o'];
+  return [String(n), 'B'];
 }

@@ -1,5 +1,6 @@
-// Point d'entrée : authentification, routage, thème, progression du scan (SSE), pied de page.
-import { api, esc, fmtBytes, fmtDateTime, fmtDuration, fmtInt, icon, parseHash, toast } from './util.js';
+// Point d'entrée : authentification, routage, thème, langue, progression du scan (SSE), pied de page.
+import { applyStatic, lang, setLang } from './i18n.js';
+import { api, esc, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtPct, icon, parseHash, t, toast } from './util.js';
 
 const PAGES = {
   explorer: () => import('./explorer.js'),
@@ -12,6 +13,16 @@ const main = document.getElementById('main');
 const app = { status: null, page: null, module: null, events: null };
 window.fev = app; // pratique pour déboguer depuis la console
 
+applyStatic();
+
+// ---------------------------------------------------------------- langue
+
+const langBtn = document.getElementById('lang-btn');
+langBtn.textContent = lang === 'fr' ? 'EN' : 'FR';
+langBtn.title = t('app.switchLang');
+langBtn.setAttribute('aria-label', t('app.switchLang'));
+langBtn.addEventListener('click', () => setLang(lang === 'fr' ? 'en' : 'fr'));
+
 // ---------------------------------------------------------------- thème
 
 const THEME_KEY = 'fev-theme';
@@ -19,8 +30,8 @@ function storedTheme() {
   try { return localStorage.getItem(THEME_KEY); } catch { return null; }
 }
 function currentTheme() {
-  const t = document.documentElement.dataset.theme;
-  if (t) return t;
+  const th = document.documentElement.dataset.theme;
+  if (th) return th;
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 function applyTheme(theme) {
@@ -46,15 +57,13 @@ function authForm({ setup }) {
   main.innerHTML = `
     <div class="auth-wrap">
       <form class="card auth" autocomplete="on">
-        <h1>${setup ? 'Création du compte' : 'Connexion'}</h1>
-        <p class="muted small" style="margin:0">${setup
-          ? 'Premier lancement : choisissez l’identifiant et le mot de passe (8 caractères minimum) qui protégeront l’interface.'
-          : 'Identifiez-vous pour accéder à File ExploraViz.'}</p>
-        <label class="field">Identifiant<input name="username" autocomplete="username" required value="${setup ? 'admin' : ''}"></label>
-        <label class="field">Mot de passe<input name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required minlength="${setup ? 8 : 1}"></label>
-        ${setup ? '<label class="field">Confirmation<input name="confirm" type="password" autocomplete="new-password" required></label>' : ''}
+        <h1>${setup ? t('auth.setupTitle') : t('auth.loginTitle')}</h1>
+        <p class="muted small" style="margin:0">${setup ? t('auth.setupHelp') : t('auth.loginHelp')}</p>
+        <label class="field">${t('auth.username')}<input name="username" autocomplete="username" required value="${setup ? 'admin' : ''}"></label>
+        <label class="field">${t('auth.password')}<input name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required minlength="${setup ? 8 : 1}"></label>
+        ${setup ? `<label class="field">${t('auth.confirm')}<input name="confirm" type="password" autocomplete="new-password" required></label>` : ''}
         <div class="err" role="alert"></div>
-        <button class="btn primary" type="submit">${setup ? 'Créer le compte' : 'Se connecter'}</button>
+        <button class="btn primary" type="submit">${setup ? t('auth.create') : t('auth.login')}</button>
       </form>
     </div>`;
   const form = main.querySelector('form');
@@ -63,7 +72,7 @@ function authForm({ setup }) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
-    if (setup && fd.get('password') !== fd.get('confirm')) { err.textContent = 'Les deux mots de passe diffèrent.'; return; }
+    if (setup && fd.get('password') !== fd.get('confirm')) { err.textContent = t('auth.mismatch'); return; }
     const btn = form.querySelector('button');
     btn.disabled = true;
     err.textContent = '';
@@ -99,7 +108,7 @@ async function route() {
   }
   app.module?.unmount?.();
   app.page = name;
-  main.innerHTML = '<div class="empty">Chargement…</div>';
+  main.innerHTML = `<div class="empty">${t('common.loading')}</div>`;
   const mod = await PAGES[name]();
   if (app.page !== name) return; // navigation entre-temps
   app.module = mod;
@@ -113,7 +122,7 @@ window.addEventListener('hashchange', route);
 const scanBtn = document.getElementById('scan-btn');
 document.querySelectorAll('#tabs a[data-icon]').forEach((a) => a.insertAdjacentHTML('afterbegin', icon(a.dataset.icon)));
 function setScanButton(running) {
-  const label = running ? 'Scan en cours…' : 'Lancer un scan maintenant';
+  const label = running ? t('scan.running') : t('scan.now');
   scanBtn.innerHTML = `${icon('scan')}<span>${label}</span>`;
   scanBtn.title = label;
   scanBtn.setAttribute('aria-label', label);
@@ -136,10 +145,9 @@ async function cancelScan() {
   toast(r.message);
 }
 
-const STATUS_LABEL = {
-  idle: 'En attente', running: 'En cours', cancelling: 'Annulation…', done: 'Terminé', cancelled: 'Annulé', error: 'Erreur',
-};
-const PHASE_LABEL = { scan: 'parcours des dossiers', indexation: 'indexation en mémoire', 'agrégats': 'calcul des statistiques' };
+const STATUS_KEYS = ['idle', 'running', 'cancelling', 'done', 'cancelled', 'error'];
+const statusLabel = (s) => (STATUS_KEYS.includes(s) ? t(`scan.status.${s}`) : s);
+const PHASE_KEYS = { scan: 'scan.phase.walk', indexation: 'scan.phase.index', aggregates: 'scan.phase.aggregate' };
 
 function renderScan(st) {
   const bar = document.getElementById('scanbar');
@@ -149,8 +157,8 @@ function renderScan(st) {
   if (!running && !['error', 'cancelled'].includes(st.status)) { bar.hidden = true; return; }
   bar.hidden = false;
   if (!running) {
-    bar.innerHTML = `<div class="line"><b>${STATUS_LABEL[st.status]}</b><span>${esc(st.message || '')}</span></div>
-      <button class="btn small" type="button" data-close>Fermer</button>`;
+    bar.innerHTML = `<div class="line"><b>${statusLabel(st.status)}</b><span>${esc(st.message || '')}</span></div>
+      <button class="btn small" type="button" data-close>${t('common.close')}</button>`;
     bar.querySelector('[data-close]').onclick = () => { bar.hidden = true; };
     return;
   }
@@ -158,14 +166,14 @@ function renderScan(st) {
   const estimate = st.percent_basis === 'estimation';
   bar.innerHTML = `
     <div class="line">
-      <b>${STATUS_LABEL[st.status] || st.status}</b>
-      <span>${esc(PHASE_LABEL[st.phase] || '')}</span>
-      <span><b>${fmtInt(st.files)}</b> fichiers · <b>${fmtInt(st.dirs)}</b> dossiers · <b>${fmtBytes(st.bytes)}</b></span>
-      <span>${fmtDuration(st.elapsed_s)} écoulées${st.files_per_s ? ` · ${fmtInt(Math.round(st.files_per_s))} fichiers/s` : ''}</span>
-      ${st.inaccessible ? `<span>${fmtInt(st.inaccessible)} inaccessibles</span>` : ''}
-      <span>${p == null ? '' : `<b>${p.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} %</b>${estimate ? ' (estimation)' : ''}`}</span>
+      <b>${statusLabel(st.status)}</b>
+      <span>${PHASE_KEYS[st.phase] ? t(PHASE_KEYS[st.phase]) : ''}</span>
+      <span>${t('scan.counts', { files: `<b>${fmtInt(st.files)}</b>`, dirs: `<b>${fmtInt(st.dirs)}</b>`, bytes: `<b>${fmtBytes(st.bytes)}</b>` })}</span>
+      <span>${t('scan.elapsed', { d: fmtDuration(st.elapsed_s) })}${st.files_per_s ? ` · ${t('scan.speed', { n: fmtInt(Math.round(st.files_per_s)) })}` : ''}</span>
+      ${st.inaccessible ? `<span>${t('scan.inaccessible', { n: fmtInt(st.inaccessible) })}</span>` : ''}
+      <span>${p == null ? '' : `<b>${fmtPct(p, 0)}</b>${estimate ? ` (${t('scan.estimate')})` : ''}`}</span>
     </div>
-    <button class="btn small danger" type="button" data-cancel ${st.status === 'cancelling' ? 'disabled' : ''}>Annuler le scan</button>
+    <button class="btn small danger" type="button" data-cancel ${st.status === 'cancelling' ? 'disabled' : ''}>${t('scan.cancel')}</button>
     <div class="progress ${p == null ? 'indeterminate' : ''}"><div style="width:${p ?? 0}%"></div></div>
     <div class="dir" title="${esc(st.current_dir)}">${st.current_root ? `${esc(st.current_root)} › ` : ''}${esc(st.current_dir || '')}</div>`;
   bar.querySelector('[data-cancel]').onclick = cancelScan;
@@ -175,14 +183,14 @@ function renderFooter(st) {
   const last = st.last_scan;
   const parts = [];
   if (last?.finished_at) {
-    parts.push(`Dernier scan : <b>${fmtDateTime(last.finished_at)}</b> (durée ${fmtDuration(last.duration_s)})`);
+    parts.push(t('footer.last', { date: `<b>${fmtDateTime(last.finished_at)}</b>`, d: fmtDuration(last.duration_s) }));
   } else {
-    parts.push('Aucun scan terminé pour l’instant');
+    parts.push(t('footer.none'));
   }
-  if (st.running) parts.push('Scan en cours');
-  else if (st.next_run) parts.push(`Prochain scan : <b>${fmtDateTime(st.next_run)}</b>`);
-  else if (st.interval_minutes === 0) parts.push('Scan automatique désactivé');
-  if (!st.index_ready) parts.push('Chargement de l’index…');
+  if (st.running) parts.push(t('footer.running'));
+  else if (st.next_run) parts.push(t('footer.next', { date: `<b>${fmtDateTime(st.next_run)}</b>` }));
+  else if (st.interval_minutes === 0) parts.push(t('footer.disabled'));
+  if (!st.index_ready) parts.push(t('footer.loading'));
   document.getElementById('footer').innerHTML = parts.map((p) => `<span>${p}</span>`).join('');
 }
 
@@ -194,7 +202,7 @@ function onStatus(st) {
   const finished = prev && prev.running && !st.running && st.status === 'done';
   const loaded = prev && !prev.index_ready && st.index_ready;
   if (finished || loaded) {
-    if (finished) toast(st.message || 'Scan terminé.');
+    if (finished) toast(st.message || t('scan.status.done'));
     window.dispatchEvent(new CustomEvent('data-changed'));
   }
 }
@@ -230,7 +238,7 @@ async function boot() {
   try {
     state = await api('/api/auth/state');
   } catch (ex) {
-    main.innerHTML = `<div class="empty">Serveur injoignable : ${esc(ex.message)}</div>`;
+    main.innerHTML = `<div class="empty">${t('app.unreachable', { error: esc(ex.message) })}</div>`;
     return;
   }
   if (state.setup_required) return authForm({ setup: true });

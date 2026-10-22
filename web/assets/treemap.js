@@ -1,5 +1,5 @@
 // Page Treemap façon WinDirStat : squarified + rendu Canvas, coussins optionnels.
-import { CAT, CATS, api, catColor, cssVar, esc, fmtBytes, fmtDate, fmtInt, hashFor, icon, pct, toast } from './util.js';
+import { CAT, CATS, api, catColor, cssVar, esc, fmtBytes, fmtDate, fmtInt, hashFor, icon, pct, t, toast } from './util.js';
 
 const MIN_AREA = 10; // px² (CSS) : en dessous, les éléments sont regroupés en « autres »
 const CUSHION = { H: 0.4, F: 0.9, Ia: 0.2, Is: 0.85, L: normalize3([-1, -1, 10]) };
@@ -22,18 +22,18 @@ export async function mount(container, params) {
     <div class="tm">
       <div class="card tm-main">
         <div class="tm-tools">
-          <nav class="crumbs" id="tm-crumbs" aria-label="Fil d’Ariane"></nav>
+          <nav class="crumbs" id="tm-crumbs" aria-label="${t('common.breadcrumb')}"></nav>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <select id="tm-root" aria-label="Racine"></select>
-            <label class="check small"><input type="checkbox" id="tm-cushion"> Coussins</label>
-            <a class="btn small" id="tm-open">${icon('folder')} Explorateur</a>
+            <select id="tm-root" aria-label="${t('ex.root')}"></select>
+            <label class="check small"><input type="checkbox" id="tm-cushion"> ${t('tm.cushion')}</label>
+            <a class="btn small" id="tm-open">${icon('folder')} ${t('nav.explorer')}</a>
           </div>
         </div>
-        <div class="tm-canvas-wrap" id="tm-wrap"><canvas id="tm-canvas" role="img" aria-label="Treemap des tailles"></canvas></div>
-        <div class="tm-legend" id="tm-legend" role="group" aria-label="Catégories (cliquez pour masquer/afficher)"></div>
+        <div class="tm-canvas-wrap" id="tm-wrap"><canvas id="tm-canvas" role="img" aria-label="${t('tm.canvas')}"></canvas></div>
+        <div class="tm-legend" id="tm-legend" role="group" aria-label="${t('tm.legendLabel')}"></div>
       </div>
       <aside class="card tm-side">
-        <div class="card-h"><h2>Sous-dossiers</h2><span class="muted small" id="tm-total"></span></div>
+        <div class="card-h"><h2>${t('tm.subdirs')}</h2><span class="muted small" id="tm-total"></span></div>
         <div class="list" id="tm-list"></div>
       </aside>
     </div>`;
@@ -155,9 +155,9 @@ function openSheet(hit) {
   const top = tops[hit.top];
   const zoomPath = top && top.node.type === 'dir' ? top.node.path : null;
   const actions = [
-    zoomPath !== null ? `<button class="btn small" type="button" data-act="zoom" data-path="${esc(zoomPath)}">Zoomer sur ${esc(top.node.name)}</button>` : '',
-    `<button class="btn small" type="button" data-act="open" data-path="${esc(hit.dir || '')}" data-rec="${hit.node.type === 'file' ? '0' : '1'}">${icon('folder')} Explorateur</button>`,
-    '<button class="btn small" type="button" data-act="close">Fermer</button>',
+    zoomPath !== null ? `<button class="btn small" type="button" data-act="zoom" data-path="${esc(zoomPath)}">${esc(t('tm.zoomOn', { name: top.node.name }))}</button>` : '',
+    `<button class="btn small" type="button" data-act="open" data-path="${esc(hit.dir || '')}" data-rec="${hit.node.type === 'file' ? '0' : '1'}">${icon('folder')} ${t('nav.explorer')}</button>`,
+    `<button class="btn small" type="button" data-act="close">${t('common.close')}</button>`,
   ].join('');
   tip.innerHTML = `${tooltip(hit)}<div class="sheet-actions">${actions}</div>`;
   tip.classList.add('sheet');
@@ -214,6 +214,12 @@ function onMove(e) {
   tip.style.top = `${Math.max(8, top)}px`;
 }
 
+/** Nom affiché d'un nœud ; les groupes (« N autres … ») sont nommés côté client, dans la langue choisie. */
+function nodeName(n) {
+  if (n.type === 'group') return t(n.cat ? 'tm.otherFiles' : 'tm.otherDirs', { n: fmtInt(n.count), count: n.count });
+  return n.name;
+}
+
 function tooltip(q) {
   const n = q.node;
   const full = (q.dir ? `${q.dir}/` : '') + (n.type === 'file' ? n.name : '');
@@ -221,20 +227,20 @@ function tooltip(q) {
   const catLine = n.cat ? `<div><span class="dot" style="background:${catColor(n.cat)}"></span> ${esc(CAT[n.cat]?.label || n.cat)}</div>` : '';
   if (n.type === 'file') {
     return `<div class="t">${esc(n.name)}</div>${catLine}
-      <div><span class="k">Chemin :</span> ${esc(full)}</div>
-      <div><span class="k">Taille :</span> ${fmtBytes(n.size)} · ${share} du dossier</div>
-      <div><span class="k">Modifié :</span> ${fmtDate(n.mtime)}</div>`;
+      <div><span class="k">${t('tm.path')}</span> ${esc(full)}</div>
+      <div><span class="k">${t('tm.size')}</span> ${fmtBytes(n.size)} · ${t('tm.ofFolder', { pct: share })}</div>
+      <div><span class="k">${t('tm.modified')}</span> ${fmtDate(n.mtime)}</div>`;
   }
   if (n.type === 'cat') {
     return `<div class="t">${esc(q.dirName)}</div>${catLine}
-      <div><span class="k">Dossier :</span> ${esc(q.dir || '/')}</div>
-      <div><span class="k">Taille :</span> ${fmtBytes(q.value)} · ${share} du dossier</div>
-      <div class="k">${pointer === 'mouse' ? 'Cliquez pour zoomer et voir le détail' : 'Zoomez pour voir le détail'}</div>`;
+      <div><span class="k">${t('tm.folder')}</span> ${esc(q.dir || '/')}</div>
+      <div><span class="k">${t('tm.size')}</span> ${fmtBytes(q.value)} · ${t('tm.ofFolder', { pct: share })}</div>
+      <div class="k">${pointer === 'mouse' ? t('tm.clickZoom') : t('tm.tapZoom')}</div>`;
   }
-  return `<div class="t">${esc(n.name)}</div>${catLine}
-    <div><span class="k">Dans :</span> ${esc(q.dir || '/')}</div>
-    <div><span class="k">Taille :</span> ${fmtBytes(q.value)} · ${share} du parent</div>
-    ${n.count ? `<div><span class="k">Éléments :</span> ${fmtInt(n.count)}</div>` : ''}`;
+  return `<div class="t">${esc(nodeName(n))}</div>${catLine}
+    <div><span class="k">${t('tm.in')}</span> ${esc(q.dir || '/')}</div>
+    <div><span class="k">${t('tm.size')}</span> ${fmtBytes(q.value)} · ${t('tm.ofParent', { pct: share })}</div>
+    ${n.count ? `<div><span class="k">${t('tm.items')}</span> ${fmtInt(n.count)}</div>` : ''}`;
 }
 
 // ---------------------------------------------------------------- chrome (fil d'Ariane, légende, liste)
@@ -262,23 +268,23 @@ function renderChrome() {
   const cats = tree?.cats || {};
   el.querySelector('#tm-legend').innerHTML = CATS.filter((c) => cats[c.id]).map((c) => `
     <button type="button" class="legend-item${hidden.has(c.id) ? ' off' : ''}" data-cat="${c.id}" aria-pressed="${!hidden.has(c.id)}"
-      title="${hidden.has(c.id) ? 'Afficher' : 'Masquer'} ${esc(c.label)}">
+      title="${esc(t(hidden.has(c.id) ? 'tm.show' : 'tm.hide', { label: c.label }))}">
       <span class="dot" style="background:${catColor(c.id)}"></span>${esc(c.label)} <span class="muted">${fmtBytes(cats[c.id])}</span>
-    </button>`).join('') || '<span class="muted small">Dossier vide</span>';
-  el.querySelector('#tm-total').textContent = tree ? `${fmtBytes(effective(tree))} · ${fmtInt(tree.files)} fichiers` : '';
+    </button>`).join('') || `<span class="muted small">${t('tm.emptyFolder')}</span>`;
+  el.querySelector('#tm-total').textContent = tree ? t('tm.total', { size: fmtBytes(effective(tree)), n: fmtInt(tree.files), count: tree.files }) : '';
 }
 
 function renderList() {
   const list = el.querySelector('#tm-list');
   const total = tree ? effective(tree) : 0;
-  const items = tops.map((t, i) => ({ t, i })).filter(({ t }) => t.node.type === 'dir' || (t.node.type === 'group' && !t.node.cat));
-  items.sort((a, b) => b.t.value - a.t.value);
-  list.innerHTML = items.length ? items.map(({ t, i }) => `
-    <div class="item" data-top="${i}" ${t.node.type === 'dir' ? `data-path="${esc(t.node.path)}"` : ''} title="${esc(t.node.path || t.node.name)}">
-      <span class="n">${t.node.type === 'dir' ? icon('folder') : ''} ${esc(t.node.name)}</span>
-      <span class="s">${fmtBytes(t.value)} · ${pct(t.value, total)}</span>
-      <span class="bar"><div style="width:${total ? (100 * t.value) / total : 0}%"></div></span>
-    </div>`).join('') : '<div class="empty small">Aucun sous-dossier.</div>';
+  const items = tops.map((top, i) => ({ top, i })).filter(({ top }) => top.node.type === 'dir' || (top.node.type === 'group' && !top.node.cat));
+  items.sort((a, b) => b.top.value - a.top.value);
+  list.innerHTML = items.length ? items.map(({ top, i }) => `
+    <div class="item" data-top="${i}" ${top.node.type === 'dir' ? `data-path="${esc(top.node.path)}"` : ''} title="${esc(top.node.path || nodeName(top.node))}">
+      <span class="n">${top.node.type === 'dir' ? icon('folder') : ''} ${esc(nodeName(top.node))}</span>
+      <span class="s">${fmtBytes(top.value)} · ${pct(top.value, total)}</span>
+      <span class="bar"><div style="width:${total ? (100 * top.value) / total : 0}%"></div></span>
+    </div>`).join('') : `<div class="empty small">${t('tm.noSubdirs')}</div>`;
 }
 
 function syncList() {
@@ -344,7 +350,7 @@ function mergeSmall(items, area) {
     if (it.value <= 0) continue;
     if (it.value * scale < MIN_AREA) { rest += it.value; count += it.node.count || 1; } else keep.push(it);
   }
-  if (rest > 0) keep.push({ node: { type: 'others', name: `${fmtInt(count)} éléments trop petits pour être affichés`, size: rest, count }, value: rest });
+  if (rest > 0) keep.push({ node: { type: 'others', name: t('tm.tooSmall', { n: fmtInt(count), count }), size: rest, count }, value: rest });
   return keep.sort((a, b) => b.value - a.value);
 }
 
@@ -414,7 +420,7 @@ function draw() {
   if (!tree || !rects.length) {
     ctx.fillStyle = cssVar('--muted');
     ctx.font = '13px system-ui, sans-serif';
-    const msg = tree ? 'Rien à afficher (dossier vide ou catégories masquées).' : P.root ? 'Chargement…' : 'Aucune racine indexée : lancez un scan.';
+    const msg = tree ? t('tm.nothing') : P.root ? t('common.loading') : t('tm.noRoot');
     ctx.fillText(msg, 16 * dpr, 24 * dpr);
     base = null;
     return;

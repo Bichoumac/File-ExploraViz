@@ -1,27 +1,20 @@
 // Page Explorateur : bandeau de statistiques, arbre, filtres, liste virtualisée.
 import {
   CAT, UNIT_FACTORS, api, catColor, debounce, esc, fmtBytes, fmtDate, fmtInt, hashFor, icon, isMobile,
-  pickFilters, qs, replaceParams, splitSize, toast,
+  pickFilters, qs, replaceParams, splitSize, t, toast, unitLabel,
 } from './util.js';
 
 const ROW_H = 36;
 const COLS = [
-  { key: 'name', label: 'Nom' },
-  { key: 'path', label: 'Chemin relatif' },
-  { key: 'ext', label: 'Ext.' },
-  { key: 'category', label: 'Cat.', title: 'Catégorie' },
-  { key: 'size', label: 'Taille', right: true },
-  { key: 'mtime', label: 'Modifié', right: true },
+  { key: 'name', label: t('ex.col.name') },
+  { key: 'path', label: t('ex.col.path') },
+  { key: 'ext', label: t('ex.col.ext') },
+  { key: 'category', label: t('ex.col.cat'), title: t('ex.col.catTitle') },
+  { key: 'size', label: t('ex.col.size'), right: true },
+  { key: 'mtime', label: t('ex.col.mtime'), right: true },
 ];
-const SORTS = [
-  ['path', 'Arborescence'], ['name', 'Nom (A → Z)'], ['-name', 'Nom (Z → A)'], ['-size', 'Taille (plus gros)'],
-  ['size', 'Taille (plus petits)'], ['-mtime', 'Modifié (récents)'], ['mtime', 'Modifié (anciens)'], ['ext', 'Extension'],
-  ['category', 'Catégorie'],
-];
-const PRESETS = [
-  ['', 'Toutes les dates'], ['7d', '7 derniers jours'], ['30d', '30 derniers jours'], ['year', 'Cette année'],
-  ['gt1y', 'Plus d’un an'], ['gt5y', 'Plus de 5 ans'], ['custom', 'Personnalisée'],
-];
+const SORTS = ['path', 'name', '-name', '-size', 'size', '-mtime', 'mtime', 'ext', 'category'].map((v) => [v, t(`ex.sort.${v}`)]);
+const PRESETS = ['', '7d', '30d', 'year', 'gt1y', 'gt5y', 'custom'].map((v) => [v, t(`ex.preset.${v || 'all'}`)]);
 
 let el; let app; let P = {}; let roots = [];
 const treeCache = new Map(); // "racine:chemin" -> sous-dossiers
@@ -123,7 +116,7 @@ async function loadRoots() {
     toast(ex.message, 'error');
   }
   const sel = el.querySelector('#f-root');
-  sel.innerHTML = '<option value="">Toutes les racines</option>'
+  sel.innerHTML = `<option value="">${t('ex.allRoots')}</option>`
     + roots.filter((r) => r.indexed).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
   sel.value = P.root || '';
 }
@@ -131,47 +124,47 @@ async function loadRoots() {
 // ---------------------------------------------------------------- gabarit
 
 function layout() {
-  const units = (id) => `<select id="${id}" aria-label="Unité">${Object.keys(UNIT_FACTORS).map((u) => `<option>${u}</option>`).join('')}</select>`;
+  const units = (id) => `<select id="${id}" aria-label="${t('ex.unit')}">${Object.keys(UNIT_FACTORS).map((u) => `<option value="${u}">${unitLabel(u)}</option>`).join('')}</select>`;
   return `
   <div class="explorer">
     <aside class="side card" id="side">
       <button class="side-toggle" type="button" id="side-toggle" aria-expanded="false" aria-controls="side-body">
-        ${icon('folder')}<span class="lbl-cur" id="side-label">Dossiers</span>${icon('chevron', 'chev')}
+        ${icon('folder')}<span class="lbl-cur" id="side-label">${t('ex.folders')}</span>${icon('chevron', 'chev')}
       </button>
       <div class="side-body" id="side-body">
         <div class="card-b">
-          <label class="field">Racine<select id="f-root"></select></label>
-          <label class="check small"><input type="checkbox" id="f-rec"> Inclure les sous-dossiers</label>
+          <label class="field">${t('ex.root')}<select id="f-root"></select></label>
+          <label class="check small"><input type="checkbox" id="f-rec"> ${t('ex.recursive')}</label>
         </div>
-        <div class="tree" id="tree" role="tree" aria-label="Arborescence"></div>
+        <div class="tree" id="tree" role="tree" aria-label="${t('ex.tree')}"></div>
       </div>
     </aside>
     <section class="content">
-      <div class="band card" id="band"><div class="empty">Chargement…</div></div>
+      <div class="band card" id="band"><div class="empty">${t('common.loading')}</div></div>
       <div class="filters card" id="filters">
         <div class="filters-top">
-          <label class="field grow">Recherche dans le nom
-            <input id="f-q" type="search" placeholder="Sous-chaîne, ou glob : *.jpg, IMG_20??*" autocomplete="off"></label>
+          <label class="field grow">${t('ex.search')}
+            <input id="f-q" type="search" placeholder="${t('ex.searchPh')}" autocomplete="off"></label>
           <button class="btn filters-toggle" type="button" id="f-toggle" aria-expanded="false" aria-controls="filters-more">
-            ${icon('filter')}<span>Filtres</span><span class="badge" id="f-count" hidden></span></button>
+            ${icon('filter')}<span>${t('ex.filters')}</span><span class="badge" id="f-count" hidden></span></button>
         </div>
         <div class="filters-more" id="filters-more">
-        <label class="field">Période<select id="f-preset">${PRESETS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
-        <label class="field">Du<input id="f-from" type="date"></label>
-        <label class="field">Au<input id="f-to" type="date"></label>
-        <label class="field">Date de<select id="f-df"><option value="mtime">modification</option><option value="ctime">création</option></select></label>
-        <div class="field"><span>Extensions</span><div class="tags" id="f-ext"><input placeholder="jpg, pdf…" aria-label="Ajouter une extension" autocomplete="off"><div class="suggest hidden"></div></div></div>
-        <label class="field">Taille min<span class="row"><input id="f-min" class="size" type="number" min="0" step="any" placeholder="—">${units('f-minu')}</span></label>
-        <label class="field">Taille max<span class="row"><input id="f-max" class="size" type="number" min="0" step="any" placeholder="—">${units('f-maxu')}</span></label>
+        <label class="field">${t('ex.period')}<select id="f-preset">${PRESETS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+        <label class="field">${t('ex.from')}<input id="f-from" type="date"></label>
+        <label class="field">${t('ex.to')}<input id="f-to" type="date"></label>
+        <label class="field">${t('ex.dateField')}<select id="f-df"><option value="mtime">${t('ex.mtime')}</option><option value="ctime">${t('ex.ctime')}</option></select></label>
+        <div class="field"><span>${t('ex.exts')}</span><div class="tags" id="f-ext"><input placeholder="jpg, pdf…" aria-label="${t('ex.addExt')}" autocomplete="off"><div class="suggest hidden"></div></div></div>
+        <label class="field">${t('ex.minSize')}<span class="row"><input id="f-min" class="size" type="number" min="0" step="any" placeholder="—">${units('f-minu')}</span></label>
+        <label class="field">${t('ex.maxSize')}<span class="row"><input id="f-max" class="size" type="number" min="0" step="any" placeholder="—">${units('f-maxu')}</span></label>
         <div class="row">
-          <button class="btn" type="button" id="f-reset">Réinitialiser</button>
+          <button class="btn" type="button" id="f-reset">${t('ex.reset')}</button>
           <a class="btn" id="f-csv" href="#" download>${icon('download')} CSV</a>
         </div>
         </div>
       </div>
-      <nav class="crumbs" id="crumbs" aria-label="Fil d’Ariane"></nav>
+      <nav class="crumbs" id="crumbs" aria-label="${t('common.breadcrumb')}"></nav>
       <div class="card tbl">
-        <label class="mobile-sort">Trier par
+        <label class="mobile-sort">${t('ex.sortBy')}
           <select id="f-sort">${SORTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
         <div class="tbl-scroll">
           <div class="grid-row thead" id="thead" role="row"></div>
@@ -281,10 +274,10 @@ function renderTags() {
   box.querySelectorAll('.tag').forEach((t) => t.remove());
   const input = box.querySelector('input');
   for (const e of exts()) {
-    const t = document.createElement('span');
-    t.className = 'tag';
-    t.innerHTML = `.${esc(e)}<button type="button" aria-label="Retirer .${esc(e)}" data-rm="${esc(e)}">×</button>`;
-    box.insertBefore(t, input);
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `.${esc(e)}<button type="button" aria-label="${esc(t('ex.removeExt', { ext: e }))}" data-rm="${esc(e)}">×</button>`;
+    box.insertBefore(tag, input);
   }
 }
 
@@ -372,8 +365,8 @@ function nodeHtml(root, path, name, size, hasChildren, error) {
   const on = P.root === root && (P.path || '') === (path || '');
   let html = `<li role="treeitem" aria-expanded="${hasChildren ? open : 'false'}"${on ? ' aria-selected="true"' : ''}>
     <div class="node${on ? ' on' : ''}">
-      <button class="tw${open ? ' open' : ''}${hasChildren ? '' : ' leaf'}" type="button" data-toggle="${esc(key)}" aria-label="Déplier">${icon('chevron')}</button>
-      <a class="lbl" href="${esc(link(root, path))}" title="${esc(path || name)}"><span>${error ? `<span class="err-dot" title="Inaccessible">⚠</span> ` : ''}${esc(name)}</span><span class="sz">${fmtBytes(size)}</span></a>
+      <button class="tw${open ? ' open' : ''}${hasChildren ? '' : ' leaf'}" type="button" data-toggle="${esc(key)}" aria-label="${t('ex.expand')}">${icon('chevron')}</button>
+      <a class="lbl" href="${esc(link(root, path))}" title="${esc(path || name)}"><span>${error ? `<span class="err-dot" title="${t('common.inaccessible')}">⚠</span> ` : ''}${esc(name)}</span><span class="sz">${fmtBytes(size)}</span></a>
     </div>`;
   if (open) {
     const kids = treeCache.get(key);
@@ -386,14 +379,14 @@ function renderTree() {
   const indexed = roots.filter((r) => r.indexed);
   el.querySelector('#tree').innerHTML = indexed.length
     ? `<ul>${indexed.map((r) => nodeHtml(r.id, '', r.name, r.bytes, (r.dirs || 0) > 1, false)).join('')}</ul>`
-    : '<div class="empty small">Aucune racine indexée.<br>Lancez un scan.</div>';
+    : `<div class="empty small">${t('ex.noRoots')}</div>`;
 }
 
 async function onTreeClick(e) {
   if (e.target.closest('a.lbl') && isMobile()) toggle(el.querySelector('#side'), el.querySelector('#side-toggle'), false);
-  const t = e.target.closest('[data-toggle]');
-  if (!t) return;
-  const key = t.dataset.toggle;
+  const tw = e.target.closest('[data-toggle]');
+  if (!tw) return;
+  const key = tw.dataset.toggle;
   if (expanded.has(key)) expanded.delete(key);
   else {
     expanded.add(key);
@@ -404,7 +397,7 @@ async function onTreeClick(e) {
 
 function renderCrumbs() {
   const c = el.querySelector('#crumbs');
-  const parts = [`<a href="${esc(hashFor('explorer', { ...P, root: '', path: '', page: '' }))}">Toutes les racines</a>`];
+  const parts = [`<a href="${esc(hashFor('explorer', { ...P, root: '', path: '', page: '' }))}">${t('ex.allRoots')}</a>`];
   if (P.root) {
     const r = roots.find((x) => x.id === P.root);
     const segs = (P.path || '').split('/').filter(Boolean);
@@ -416,7 +409,7 @@ function renderCrumbs() {
     });
   }
   c.innerHTML = parts.join('<span class="sep">›</span>');
-  const cur = P.root ? ((P.path || '').split('/').filter(Boolean).pop() || roots.find((x) => x.id === P.root)?.name || P.root) : 'Toutes les racines';
+  const cur = P.root ? ((P.path || '').split('/').filter(Boolean).pop() || roots.find((x) => x.id === P.root)?.name || P.root) : t('ex.allRoots');
   el.querySelector('#side-label').textContent = cur;
 }
 
@@ -432,23 +425,23 @@ async function loadBand() {
     band.innerHTML = `<div class="empty">${esc(ex.message)}</div>`;
     return;
   }
-  const t = st.totals;
+  const tot = st.totals;
   const active = new Set((P.category || '').split(',').filter(Boolean));
   const filtered = Object.keys(pickFilters(P)).some((k) => !['root', 'path', 'recursive'].includes(k));
   const segs = st.categories.filter((c) => c.bytes > 0)
-    .map((c) => `<div style="flex:${c.bytes} 1 0;background:${catColor(c.id)}" title="${esc(CAT[c.id].label)} : ${fmtBytes(c.bytes)} (${fmtInt(c.files)} fichiers)"></div>`).join('');
+    .map((c) => `<div style="flex:${c.bytes} 1 0;background:${catColor(c.id)}" title="${esc(t('ex.segTitle', { label: CAT[c.id].label, size: fmtBytes(c.bytes), n: fmtInt(c.files), count: c.files }))}"></div>`).join('');
   band.innerHTML = `
     <div class="kpis">
-      <div class="kpi"><div class="v">${fmtInt(t.files)}</div><div class="l">fichiers</div></div>
-      <div class="kpi"><div class="v">${fmtInt(filtered ? t.dirs_with_files : t.dirs)}</div><div class="l">${filtered ? 'dossiers concernés' : 'dossiers'}</div></div>
-      <div class="kpi"><div class="v">${fmtBytes(t.bytes)}</div><div class="l">taille totale</div></div>
-      ${st.source === 'summary' ? '<div class="kpi"><div class="l">Agrégats pré-calculés (index en chargement)</div></div>' : ''}
+      <div class="kpi"><div class="v">${fmtInt(tot.files)}</div><div class="l">${t('ex.kpi.files', { count: tot.files })}</div></div>
+      <div class="kpi"><div class="v">${fmtInt(filtered ? tot.dirs_with_files : tot.dirs)}</div><div class="l">${filtered ? t('ex.kpi.dirsMatching') : t('ex.kpi.dirs', { count: tot.dirs })}</div></div>
+      <div class="kpi"><div class="v">${fmtBytes(tot.bytes)}</div><div class="l">${t('ex.kpi.size')}</div></div>
+      ${st.source === 'summary' ? `<div class="kpi"><div class="l">${t('ex.precomputed')}</div></div>` : ''}
     </div>
-    <div class="stack" role="img" aria-label="Répartition du volume par catégorie">${segs}</div>
-    <div class="cats" role="group" aria-label="Filtrer par catégorie (cliquez pour ajouter ou retirer)">
+    <div class="stack" role="img" aria-label="${t('ex.stackLabel')}">${segs}</div>
+    <div class="cats" role="group" aria-label="${t('ex.catsLabel')}">
       ${st.categories.map((c) => `
         <button type="button" class="cat${active.has(c.id) ? ' on' : ''}${c.files ? '' : ' zero'}" data-cat="${c.id}" aria-pressed="${active.has(c.id)}"
-          title="Filtrer : ${esc(CAT[c.id].label)}">
+          title="${esc(t('ex.filterBy', { label: CAT[c.id].label }))}">
           <span class="sw" style="background:${catColor(c.id)}">${icon(CAT[c.id].icon)}</span>
           <span class="n">${esc(CAT[c.id].label)}</span>
           <span class="m">${fmtInt(c.files)} · ${fmtBytes(c.bytes)}</span>
@@ -482,7 +475,7 @@ async function loadFiles() {
   inner.style.height = isMobile() ? 'auto' : `${rows.length * ROW_H}px`;
   if (!rows.length) {
     inner.style.height = 'auto';
-    inner.innerHTML = `<div class="empty">${r.found === false ? 'Ce dossier n’existe pas (ou plus) dans l’index.' : 'Aucun fichier ne correspond aux filtres.'}</div>`;
+    inner.innerHTML = `<div class="empty">${r.found === false ? t('ex.notFound') : t('ex.noMatch')}</div>`;
   } else {
     inner.innerHTML = '';
     renderRows();
@@ -495,7 +488,7 @@ function renderHead() {
   const key = sort.replace(/^-/, '');
   const arrow = sort.startsWith('-') ? '▼' : '▲';
   el.querySelector('#thead').innerHTML = COLS.map((c) => `
-    <div data-sort="${c.key}" class="${c.right ? 'r' : ''}" role="columnheader" aria-sort="${c.key === key ? (sort.startsWith('-') ? 'descending' : 'ascending') : 'none'}" title="Trier par ${c.title || c.label}">
+    <div data-sort="${c.key}" class="${c.right ? 'r' : ''}" role="columnheader" aria-sort="${c.key === key ? (sort.startsWith('-') ? 'descending' : 'ascending') : 'none'}" title="${esc(t('ex.sortByCol', { col: c.title || c.label }))}">
       ${c.label}${c.key === key ? ` <span class="arrow">${arrow}</span>` : ''}
     </div>`).join('');
 }
@@ -534,8 +527,8 @@ function renderRows() {
       <div class="path" title="${esc(f.root)} › ${esc(f.path)}"><a href="${esc(dirLink)}">${P.root ? '' : `${esc(f.root)} › `}${esc(f.dir ? `${f.dir}/` : './')}</a></div>
       <div>${f.ext ? esc(f.ext) : '<span class="muted">—</span>'}</div>
       <div title="${esc(c.label)}"><span class="caticon" style="background:${catColor(f.category)}">${icon(c.icon)}</span></div>
-      <div class="r num" title="${fmtInt(f.size)} octets">${fmtBytes(f.size)}</div>
-      <div class="r num" title="Création : ${fmtDate(f.ctime)}">${fmtDate(f.mtime)}</div>
+      <div class="r num" title="${t('ex.bytes', { n: fmtInt(f.size), count: f.size })}">${fmtBytes(f.size)}</div>
+      <div class="r num" title="${t('ex.created', { date: fmtDate(f.ctime) })}">${fmtDate(f.mtime)}</div>
     </div>`;
   }
   inner.innerHTML = html;
@@ -547,11 +540,11 @@ function renderPager() {
   const from = total ? (page - 1) * pageSize + 1 : 0;
   const to = Math.min(total, page * pageSize);
   el.querySelector('#pager').innerHTML = `
-    <span class="muted">${fmtInt(from)}–${fmtInt(to)} sur <b>${fmtInt(total)}</b> fichiers</span>
+    <span class="muted">${t('ex.range', { from: fmtInt(from), to: fmtInt(to), total: `<b>${fmtInt(total)}</b>`, count: total })}</span>
     <span class="row">
-      ${btn(1, '«', page <= 1)}${btn(page - 1, '‹ Précédente', page <= 1)}
-      <span class="num">Page ${fmtInt(page)} / ${fmtInt(pages)}</span>
-      ${btn(page + 1, 'Suivante ›', page >= pages)}${btn(pages, '»', page >= pages)}
-      <select id="f-ps" aria-label="Lignes par page">${[50, 100, 200, 500, 1000].map((n) => `<option ${n === pageSize ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      ${btn(1, '«', page <= 1)}${btn(page - 1, t('ex.prev'), page <= 1)}
+      <span class="num">${t('ex.page', { p: fmtInt(page), n: fmtInt(pages) })}</span>
+      ${btn(page + 1, t('ex.next'), page >= pages)}${btn(pages, '»', page >= pages)}
+      <select id="f-ps" aria-label="${t('ex.perPage')}">${[50, 100, 200, 500, 1000].map((n) => `<option ${n === pageSize ? 'selected' : ''}>${n}</option>`).join('')}</select>
     </span>`;
 }

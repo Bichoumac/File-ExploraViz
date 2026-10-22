@@ -137,7 +137,7 @@ def test_scan_then_query(client, settings):
     csv = client.get("/api/files/export.csv", params={"root": "docs"})
     assert csv.status_code == 200
     lines = csv.content.decode("utf-8-sig").strip().splitlines()
-    assert lines[0].startswith("racine;chemin") and len(lines) == 3
+    assert lines[0].startswith("root;path") and len(lines) == 3
 
     hist = client.get("/api/stats/history").json()
     assert len(hist) == 1 and hist[0]["files"] == 11
@@ -163,7 +163,11 @@ def test_second_scan_is_rejected_while_running(client):
     assert ctx.scans._lock.acquire()  # simule un scan en cours
     try:
         r = client.post("/api/scan", json={})
-        assert r.status_code == 409 and "déjà en cours" in r.json()["detail"]
+        assert r.status_code == 409 and "already running" in r.json()["detail"]
+        assert r.json()["code"] == "scan_already_running"
+        client.cookies.set("fev_lang", "fr")
+        r = client.post("/api/scan", json={})
+        assert "déjà en cours" in r.json()["detail"]
     finally:
         ctx.scans._lock.release()
 
@@ -214,3 +218,31 @@ def test_cache_clear(client, settings):
     ctx = client.app.state.ctx
     wait_until(lambda: not ctx.scans.running)
     assert client.get("/api/files").json()["total"] == 11
+
+
+def test_api_messages_follow_language_cookie(client):
+    r = client.get("/api/files")
+    assert r.status_code == 401 and r.json() == {"detail": "Authentication required.", "code": "auth_required"}
+    client.cookies.set("fev_lang", "fr")
+    assert client.get("/api/files").json()["detail"] == "Authentification requise."
+    client.cookies.set("fev_lang", "xx")  # langue inconnue : anglais
+    assert client.get("/api/files").json()["detail"] == "Authentication required."
+
+
+def test_config_errors_and_csv_are_translated(client):
+    login(client)
+    scan_and_wait(client)
+    cfg = client.get("/api/config").json()
+    bad = {"scan": {**cfg["scan"], "interval_minutes": -5}}
+    r = client.put("/api/config", json=bad)
+    assert r.json()["detail"] == "Invalid settings." and r.json()["errors"] == ["scan.interval_minutes: must be ≥ 0"]
+    client.cookies.set("fev_lang", "fr")
+    r = client.put("/api/config", json=bad)
+    assert r.json()["errors"] == ["scan.interval_minutes : doit être ≥ 0"]
+    head = client.get("/api/files/export.csv", params={"root": "docs"}).content.decode("utf-8-sig").splitlines()
+    assert head[0].startswith("racine;chemin") and any("Classeurs" in line for line in head)
+    client.cookies.set("fev_lang", "en")
+    head = client.get("/api/files/export.csv", params={"root": "docs"}).content.decode("utf-8-sig").splitlines()
+    assert head[0].startswith("root;path") and any("Spreadsheets" in line for line in head)
+    st = client.get("/api/scan/status").json()
+    assert st["message"].startswith("Scan finished")

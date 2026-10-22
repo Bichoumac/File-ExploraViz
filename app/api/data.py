@@ -13,11 +13,12 @@ from collections.abc import Iterator
 from datetime import datetime
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..aggregates import build_tree, compute_stats, find_in_tree, subdirs
-from ..categories import CATEGORY_LABELS
+from ..categories import CATEGORY_LABELS, CATEGORY_LABELS_EN
+from ..i18n import ApiError, lang_of, tr
 from ..pathsec import PathError, normalize_rel
 from ..store import FileFilter
 from .deps import ctx_of, file_filter, require_user
@@ -55,7 +56,7 @@ def _rel(path: str) -> str:
     try:
         return normalize_rel(path)
     except PathError as exc:
-        raise HTTPException(400, f"Chemin refusé : {exc}") from exc
+        raise ApiError(400, "path_refused") from exc
 
 
 @router.get("/tree", summary="Sous-dossiers directs d'un dossier")
@@ -65,7 +66,7 @@ def tree(request: Request, root: str = Query(...), path: str = Query("")) -> dic
     rel = _rel(path)
     d = store.resolve_dir(root, rel)
     if d is None:
-        raise HTTPException(404, "Dossier introuvable dans l'index.")
+        raise ApiError(404, "dir_not_found")
     return {"root": root, "path": rel, "dirs": subdirs(store, d)}
 
 
@@ -113,17 +114,19 @@ def export_csv(
     ctx = ctx_of(request)
     store = ctx.store_or_503()
     rows = store.sorted_rows(f, sort)
+    lang = lang_of(request)
+    labels = CATEGORY_LABELS if lang == "fr" else CATEGORY_LABELS_EN
 
     def generate() -> Iterator[str]:
         buf = io.StringIO()
         writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
         buf.write("﻿")  # BOM : Excel détecte l'UTF-8
-        writer.writerow(["racine", "chemin", "nom", "extension", "catégorie", "taille_octets", "modification", "création"])
+        writer.writerow(tr("csv_header", lang).split(";"))
         for start in range(0, len(rows), 5000):
             for i in rows[start : start + 5000].tolist():
                 r = store.row_dict(i)
                 writer.writerow(
-                    [r["root"], r["path"], r["name"], r["ext"], CATEGORY_LABELS[r["category"]], r["size"],
+                    [r["root"], r["path"], r["name"], r["ext"], labels[r["category"]], r["size"],
                      _fmt_ts(r["mtime"]), _fmt_ts(r["ctime"])]
                 )
             yield buf.getvalue()
@@ -164,7 +167,7 @@ def stats(request: Request, f: FileFilter = Depends(file_filter), detail: bool =
             pre = summary.get("stats") if f.root is None else (summary.get("stats_by_root") or {}).get(f.root)
             if pre:
                 return {**pre, "source": "summary", "found": True}
-        raise HTTPException(503, "Index en cours de chargement, réessayez dans quelques secondes.")
+        raise ApiError(503, "index_loading")
     key = (f, detail)
     cached = store.stats_cache.get(key)
     if cached is None:
@@ -192,11 +195,11 @@ def treemap(
         tree_ = ((ctx.state.summary or {}).get("trees") or {}).get(root)
         node = find_in_tree(tree_, rel) if tree_ else None
         if node is None:
-            raise HTTPException(503, "Index en cours de chargement, réessayez dans quelques secondes.")
+            raise ApiError(503, "index_loading")
         return {**node, "root": root}
     d = store.resolve_dir(root, rel)
     if d is None:
-        raise HTTPException(404, "Dossier introuvable dans l'index.")
+        raise ApiError(404, "dir_not_found")
     key = ("treemap", d, depth)
     tree_ = store.stats_cache.get(key)
     if tree_ is None:

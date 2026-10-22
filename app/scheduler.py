@@ -92,8 +92,8 @@ class Scheduler:
                 continue
             except TimeoutError:
                 pass
-            started, message = self.scans.start(None, "planifié")
-            log.info("scan planifié", extra={"started": started, "detail": message})
+            started, key = self.scans.start(None, "planifié")
+            log.info("scan planifié", extra={"started": started, "detail": key})
             if not started:
                 if not self.scans.state.index_ready.is_set():
                     self._skip_until = time.time() + 15  # index encore en chargement

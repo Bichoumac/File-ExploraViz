@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 
 from ..categories import CATEGORIES, DEFAULT_MAPPING, build_ext_map
 from ..config import DEFAULT_EXCLUSIONS, ConfigError
+from ..i18n import ApiError, lang_of, tr
 from ..store import Store
 from ..summary import build_summary
 from .deps import Context, ctx_of, require_user
@@ -57,8 +58,9 @@ def put_config(request: Request, body: dict = Body(...)) -> dict:
     try:
         ctx.cfg.update(body)
     except ConfigError as exc:
+        lang = lang_of(request)
         return JSONResponse(  # type: ignore[return-value]
-            status_code=422, content={"detail": "Configuration invalide.", "errors": exc.messages}
+            status_code=422, content={"detail": tr("config_invalid", lang), "code": "config_invalid", "errors": exc.render(lang)}
         )
     if ctx.cfg.config.categories != before:
         threading.Thread(target=_recategorize, args=(ctx,), daemon=True, name="recategorize").start()
@@ -70,9 +72,10 @@ def put_config(request: Request, body: dict = Body(...)) -> dict:
 def clear_cache(request: Request) -> dict:
     ctx = ctx_of(request)
     if ctx.scans.running:
-        raise HTTPException(409, "Un scan est en cours : annulez-le d'abord.")
+        raise ApiError(409, "scan_running_cancel_first")
     ctx.scans.summaries.clear()
     ctx.state.summary = None
     ctx.state.swap(Store.empty(), None)
-    ok, message = ctx.scans.start(None, "rescan")
-    return {"started": ok, "message": "Cache vidé. " + message}
+    ok, key = ctx.scans.start(None, "rescan")
+    lang = lang_of(request)
+    return {"started": ok, "message": tr("cache_cleared", lang, detail=tr(key, lang)), "code": key}

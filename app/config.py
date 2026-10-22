@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -12,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .categories import CATEGORY_IDS, DEFAULT_MAPPING, normalize_ext
+from .i18n import DEFAULT_LANG, tr
 from .settings import Settings
 from .yamlio import read_yaml, write_yaml
 
@@ -24,6 +26,12 @@ DEFAULT_EXCLUSIONS = [
 ]
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_CODE = "§"  # préfixe des erreurs de validation traduisibles : « §clé§{paramètres JSON} »
+
+
+def _verr(key: str, **params: str) -> ValueError:
+    """Erreur de validation désignée par une clé de app/i18n.py (traduite à l'affichage)."""
+    return ValueError(f"{_CODE}{key}{_CODE}{json.dumps(params, ensure_ascii=False)}")
 ROOT_ID_RE = r"^[A-Za-z0-9._-]{1,64}$"
 
 
@@ -41,7 +49,7 @@ class RootConfig(Strict):
     @classmethod
     def _folder(cls, v: str) -> str:
         if "/" in v or "\\" in v or v in (".", "..") or "\x00" in v:
-            raise ValueError("doit être un nom de dossier direct de /data")
+            raise _verr("v_folder")
         return v
 
 
@@ -54,7 +62,7 @@ class OffPeak(Strict):
     @classmethod
     def _hhmm(cls, v: str) -> str:
         if not _HHMM.match(v):
-            raise ValueError("format HH:MM attendu (ex. 01:30)")
+            raise _verr("v_hhmm")
         return v
 
 
@@ -72,7 +80,7 @@ class ScanConfig(Strict):
         out = [p.strip() for p in v if p and p.strip()]
         for p in out:
             if "\x00" in p:
-                raise ValueError("motif invalide")
+                raise _verr("v_pattern")
         return out
 
 
@@ -102,14 +110,14 @@ class AppConfig(Strict):
         out: dict[str, list[str]] = {}
         for cid, exts in v.items():
             if cid not in CATEGORY_IDS or cid == "other":
-                raise ValueError(f"catégorie inconnue « {cid} » (attendu : {', '.join(CATEGORY_IDS[:-1])})")
+                raise _verr("v_unknown_category", cid=cid, expected=", ".join(CATEGORY_IDS[:-1]))
             clean: list[str] = []
             for ext in exts:
                 e = normalize_ext(str(ext))
                 if not e or not re.fullmatch(r"[^\s/\\]{1,32}", e):
-                    raise ValueError(f"extension invalide « {ext} » dans {cid}")
+                    raise _verr("v_bad_extension", ext=str(ext), cid=cid)
                 if e in seen and seen[e] != cid:
-                    raise ValueError(f"l'extension « {e} » est à la fois dans {seen[e]} et {cid}")
+                    raise _verr("v_ext_conflict", ext=e, a=seen[e], b=cid)
                 if e not in clean:
                     clean.append(e)
                 seen[e] = cid
@@ -120,40 +128,58 @@ class AppConfig(Strict):
     def _unique_roots(self) -> AppConfig:
         ids = [r.id for r in self.roots]
         if len(ids) != len(set(ids)):
-            raise ValueError("identifiants de racines en double")
+            raise _verr("v_duplicate_roots")
         return self
 
 
-def format_validation_error(exc: ValidationError) -> list[str]:
-    """Messages lisibles : ``scan.interval_minutes : doit être ≥ 0``."""
-    messages = []
+ErrorItem = tuple[str, str | None, dict[str, object], str]  # (emplacement, clé, paramètres, message brut)
+
+
+def validation_items(exc: ValidationError) -> list[ErrorItem]:
+    """Erreurs Pydantic ramenées à des clés traduisibles (voir app/i18n.py)."""
+    items: list[ErrorItem] = []
     for err in exc.errors():
         loc = ".".join(str(p) for p in err["loc"]) or "configuration"
-        msg = err["msg"].removeprefix("Value error, ")
+        raw = err["msg"].removeprefix("Value error, ")
         ctx = err.get("ctx") or {}
         typ = err["type"]
-        if typ == "greater_than_equal":
-            msg = f"doit être ≥ {ctx.get('ge')}"
+        key: str | None = None
+        params: dict[str, object] = {}
+        if raw.startswith(_CODE):
+            key, _, payload = raw[1:].partition(_CODE)
+            params = json.loads(payload or "{}")
+        elif typ == "greater_than_equal":
+            key, params = "v_ge", {"n": ctx.get("ge")}
         elif typ == "less_than_equal":
-            msg = f"doit être ≤ {ctx.get('le')}"
+            key, params = "v_le", {"n": ctx.get("le")}
         elif typ == "extra_forbidden":
-            msg = "clé inconnue"
+            key = "v_extra"
         elif typ == "missing":
-            msg = "valeur obligatoire"
+            key = "v_missing"
         elif typ in ("int_parsing", "int_type"):
-            msg = "nombre entier attendu"
+            key = "v_int"
         elif typ in ("bool_parsing", "bool_type"):
-            msg = "booléen attendu (true/false)"
+            key = "v_bool"
         elif typ == "string_pattern_mismatch":
-            msg = "caractères autorisés : lettres, chiffres, . _ -"
-        messages.append(f"{loc} : {msg}")
-    return messages
+            key = "v_id_chars"
+        items.append((loc, key, params, raw))
+    return items
+
+
+def render_errors(items: list[ErrorItem], lang: str = DEFAULT_LANG) -> list[str]:
+    """Messages lisibles : ``scan.interval_minutes: must be ≥ 0`` / ``… : doit être ≥ 0``."""
+    sep = " : " if lang == "fr" else ": "
+    return [f"{loc}{sep}{tr(key, lang, **params) if key else raw}" for loc, key, params, raw in items]
 
 
 class ConfigError(Exception):
-    def __init__(self, messages: list[str]):
-        super().__init__("; ".join(messages))
-        self.messages = messages
+    def __init__(self, items: list[ErrorItem]):
+        self.items = items
+        self.messages = render_errors(items)
+        super().__init__("; ".join(self.messages))
+
+    def render(self, lang: str) -> list[str]:
+        return render_errors(self.items, lang)
 
 
 def _slug(name: str) -> str:
@@ -181,7 +207,7 @@ class ConfigManager:
                 try:
                     cfg = AppConfig.model_validate(raw)
                 except ValidationError as exc:
-                    raise ConfigError(format_validation_error(exc)) from exc
+                    raise ConfigError(validation_items(exc)) from exc
                 created = False
             else:
                 cfg = AppConfig()
@@ -220,7 +246,7 @@ class ConfigManager:
             try:
                 cfg = AppConfig.model_validate(merged)
             except ValidationError as exc:
-                raise ConfigError(format_validation_error(exc)) from exc
+                raise ConfigError(validation_items(exc)) from exc
             self._config = cfg
             self.sync_roots()
             self.save()

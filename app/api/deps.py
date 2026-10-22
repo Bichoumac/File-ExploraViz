@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from fastapi import HTTPException, Query, Request
+from fastapi import Query, Request
 
 from ..auth import COOKIE_NAME, LoginThrottle, SessionCodec, fingerprint
 from ..config import ConfigManager
+from ..i18n import ApiError
 from ..pathsec import PathError, normalize_rel
 from ..scan_manager import AppState, ScanManager
 from ..scheduler import Scheduler
@@ -42,7 +43,7 @@ class Context:
     def store_or_503(self) -> Store:
         store = self.state.store
         if store is None:
-            raise HTTPException(503, "Index en cours de chargement, réessayez dans quelques secondes.")
+            raise ApiError(503, "index_loading")
         return store
 
 
@@ -56,7 +57,7 @@ def require_user(request: Request) -> str:
         return "anonyme"
     user = ctx.session_user(request)
     if user is None:
-        raise HTTPException(401, "Authentification requise.")
+        raise ApiError(401, "auth_required")
     return user
 
 
@@ -72,7 +73,7 @@ def _date(value: str | None, name: str) -> date | None:
     try:
         return date.fromisoformat(value)
     except ValueError as exc:
-        raise HTTPException(400, f"Paramètre « {name} » invalide : date AAAA-MM-JJ attendue.") from exc
+        raise ApiError(400, "bad_date", name=name) from exc
 
 
 def file_filter(
@@ -91,7 +92,7 @@ def file_filter(
     try:
         rel = normalize_rel(path)
     except PathError as exc:
-        raise HTTPException(400, f"Chemin refusé : {exc}") from exc
+        raise ApiError(400, "path_refused") from exc
     d_from, d_to = _date(from_, "from"), _date(to, "to")
     return FileFilter(
         root=root or None,

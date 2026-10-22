@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
+from ..i18n import ApiError
 from ..auth import COOKIE_NAME, MIN_PASSWORD_LENGTH, fingerprint, hash_password, verify_password
 from .deps import Context, ctx_of, require_user
 
@@ -35,7 +36,7 @@ def _set_cookie(ctx: Context, request: Request, response: Response) -> None:
 
 def _check_password_policy(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise HTTPException(400, f"Le mot de passe doit contenir au moins {MIN_PASSWORD_LENGTH} caractères.")
+        raise ApiError(400, "password_too_short", n=MIN_PASSWORD_LENGTH)
 
 
 @router.get("/state", summary="État de l'authentification")
@@ -54,7 +55,7 @@ def setup(body: Credentials, request: Request, response: Response) -> dict:
     ctx = ctx_of(request)
     auth = ctx.cfg.config.auth
     if auth.password_hash:
-        raise HTTPException(409, "Un compte existe déjà.")
+        raise ApiError(409, "account_exists")
     _check_password_policy(body.password)
     auth.username = body.username.strip()
     auth.password_hash = hash_password(body.password)
@@ -70,15 +71,13 @@ def login(body: Credentials, request: Request, response: Response) -> dict:
     keys = (f"ip:{ip}", f"user:{body.username.lower()}")
     wait = ctx.throttle.retry_after(*keys)
     if wait > 0:
-        raise HTTPException(
-            429, f"Trop de tentatives : réessayez dans {int(wait) + 1} s.", headers={"Retry-After": str(int(wait) + 1)}
-        )
+        raise ApiError(429, "too_many_attempts", headers={"Retry-After": str(int(wait) + 1)}, s=int(wait) + 1)
     auth = ctx.cfg.config.auth
     ok = verify_password(body.password, auth.password_hash) and body.username == auth.username
     if not ok:
         ctx.throttle.failure(*keys)
         time.sleep(0.3)
-        raise HTTPException(401, "Identifiant ou mot de passe incorrect.")
+        raise ApiError(401, "bad_credentials")
     ctx.throttle.success(*keys)
     _set_cookie(ctx, request, response)
     return {"user": auth.username}
@@ -94,10 +93,10 @@ def logout(response: Response) -> dict:
 def change_password(body: PasswordChange, request: Request, response: Response) -> dict:
     ctx = ctx_of(request)
     if ctx.settings.auth_disabled:
-        raise HTTPException(400, "Authentification désactivée (AUTH_DISABLED=true).")
+        raise ApiError(400, "auth_disabled")
     auth = ctx.cfg.config.auth
     if not verify_password(body.current, auth.password_hash):
-        raise HTTPException(400, "Mot de passe actuel incorrect.")
+        raise ApiError(400, "bad_current_password")
     _check_password_policy(body.new)
     auth.password_hash = hash_password(body.new)
     ctx.cfg.save()

@@ -17,6 +17,12 @@ CATEGORIES: list[tuple[str, str]] = [
     ("other", "Autres"),
 ]
 
+CATEGORY_LABELS_EN: dict[str, str] = {
+    "photo": "Photos", "video": "Videos", "audio": "Audio", "document": "Text documents",
+    "spreadsheet": "Spreadsheets", "presentation": "Presentations", "pdf": "PDF", "archive": "Archives",
+    "code": "Code", "executable": "Executables/Disk images", "other": "Other",
+}
+
 CATEGORY_IDS: list[str] = [cid for cid, _ in CATEGORIES]
 CATEGORY_LABELS: dict[str, str] = dict(CATEGORIES)
 CATEGORY_INDEX: dict[str, int] = {cid: i for i, cid in enumerate(CATEGORY_IDS)}
