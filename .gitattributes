@@ -1,0 +1,4 @@
+# LF everywhere (the image is built on Linux), binaries and bundled libraries left untouched.
+* text=auto eol=lf
+*.png binary
+web/vendor/*.js -text

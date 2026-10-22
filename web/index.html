@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>File ExploraViz</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/explorer" data-i18n-label="app.home" aria-label="File ExploraViz">
+      <img src="/favicon.svg" alt="" width="26" height="26">
+      <span>File ExploraViz</span>
+    </a>
+    <nav class="tabs" id="tabs" data-i18n-label="app.mainNav" aria-label="Main navigation" hidden>
+      <a href="#/explorer" data-page="explorer" data-icon="folder"><span data-i18n="nav.explorer">Explorer</span></a>
+      <a href="#/stats" data-page="stats" data-icon="chart"><span data-i18n="nav.stats">Statistics</span></a>
+      <a href="#/treemap" data-page="treemap" data-icon="grid"><span data-i18n="nav.treemap">Treemap</span></a>
+      <a href="#/config" data-page="config" data-icon="sliders"><span data-i18n="nav.config">Settings</span></a>
+    </nav>
+    <div class="top-actions">
+      <button class="btn primary" id="scan-btn" type="button" hidden></button>
+      <button class="icon-btn lang-btn" id="lang-btn" type="button"></button>
+      <button class="icon-btn" id="theme-btn" type="button" data-i18n-title="app.theme"></button>
+      <button class="icon-btn" id="logout-btn" type="button" data-i18n-title="app.logout" hidden></button>
+    </div>
+  </header>
+
+  <section class="scanbar" id="scanbar" hidden aria-live="polite"></section>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <main id="main" tabindex="-1"></main>
+
+  <footer class="footer" id="footer"></footer>
+</body>
+</html>

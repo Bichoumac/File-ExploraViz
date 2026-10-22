@@ -1,0 +1,63 @@
+# File ExploraViz — works as-is with Dockge (TrueNAS SCALE) and with `docker compose up -d`.
+# ${...} values come from the .env file next to this one (see .env.example).
+# Only the "Directories to scan" lines need editing.
+
+services:
+  file-exploraviz:
+    # Ready-made image (linux/amd64 and linux/arm64), published from GitHub.
+    # FEV_TAG: "latest" (last release), a version such as "1.0.0", or "edge" (main branch).
+    image: ghcr.io/bichoumac/file-exploraviz:${FEV_TAG:-latest}
+    container_name: file-exploraviz
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      SUPPLEMENTARY_GIDS: ${SUPPLEMENTARY_GIDS:-}
+      TZ: ${TZ:-Europe/Paris}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-15}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    volumes:
+      # Application data. APP_DATA defaults to the folder of this file; with Dockge, set an
+      # absolute path in .env (e.g. APP_DATA=/mnt/tank/apps/file-exploraviz).
+      - ${APP_DATA:-.}/config:/config       # settings (config.yaml)
+      - ${APP_DATA:-.}/cache:/cache         # scan results (YAML) and history
+      # Directories to scan: one sub-folder of /data each, ALWAYS read-only (:ro).
+      - /mnt/tank/photos:/data/photos:ro
+      - /mnt/tank/documents:/data/documents:ro
+      # SMB/CIFS share (see the "volumes" section at the bottom of the file):
+      # - nas-smb:/data/share:ro
+
+    # --- Hardening ------------------------------------------------------------
+    read_only: true               # read-only container filesystem
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:                      # only to hand /config and /cache to PUID:PGID, then switch to that user
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+
+    # --- Indicative resource limits (uncomment if needed) --------------------
+    # cpus: "1.0"
+    # mem_limit: 768m             # ~300 MB is enough for 1 million indexed files
+
+# --- Example: SMB/CIFS share mounted read-only --------------------------------
+# Credentials read from .env (SMB_HOST, SMB_SHARE, SMB_USER, SMB_PASSWORD).
+# volumes:
+#   nas-smb:
+#     driver: local
+#     driver_opts:
+#       type: cifs
+#       device: "//${SMB_HOST}/${SMB_SHARE}"
+#       o: "ro,username=${SMB_USER},password=${SMB_PASSWORD},vers=3.0,uid=${PUID:-1000},gid=${PGID:-1000},file_mode=0444,dir_mode=0555,noserverino"
