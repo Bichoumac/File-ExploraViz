@@ -73,6 +73,27 @@ MESSAGES: dict[str, dict[str, str]] = {
         "fr": "Un scan est en cours : annulez-le d'abord.",
     },
     "cache_cleared": {"en": "Cache cleared. {detail}", "fr": "Cache vidé. {detail}"},
+    # --- comptes
+    "admin_only": {"en": "Administrators only.", "fr": "Réservé aux administrateurs."},
+    "user_exists": {"en": "An account named “{name}” already exists.", "fr": "Un compte « {name} » existe déjà."},
+    "user_not_found": {"en": "Unknown account.", "fr": "Compte inconnu."},
+    "invalid_username": {
+        "en": "Invalid username: 1 to 64 characters among letters, digits and . _ @ -",
+        "fr": "Identifiant invalide : 1 à 64 caractères parmi lettres, chiffres et . _ @ -",
+    },
+    "invalid_scope": {"en": "Invalid folder: {detail}", "fr": "Dossier invalide : {detail}"},
+    "unknown_root": {"en": "unknown root “{root}”", "fr": "racine « {root} » inconnue"},
+    "bad_scope_path": {"en": "path refused “{path}”", "fr": "chemin refusé « {path} »"},
+    "cannot_delete_self": {"en": "You cannot delete your own account.", "fr": "Vous ne pouvez pas supprimer votre propre compte."},
+    "last_admin": {
+        "en": "At least one administrator account must remain.",
+        "fr": "Il doit rester au moins un compte administrateur.",
+    },
+    "reset_admin_forbidden": {
+        "en": "An administrator's password can only be changed by that administrator.",
+        "fr": "Le mot de passe d'un administrateur ne peut être changé que par lui-même.",
+    },
+    "password_reset": {"en": "Password reset for {name}.", "fr": "Mot de passe de {name} réinitialisé."},
     # --- validation de config.yaml (préfixées « v_ »)
     "v_folder": {"en": "must be a direct folder name under /data", "fr": "doit être un nom de dossier direct de /data"},
     "v_hhmm": {"en": "HH:MM format expected (e.g. 01:30)", "fr": "format HH:MM attendu (ex. 01:30)"},
@@ -87,6 +108,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "fr": "l'extension « {ext} » est à la fois dans {a} et {b}",
     },
     "v_duplicate_roots": {"en": "duplicate root identifiers", "fr": "identifiants de racines en double"},
+    "v_duplicate_users": {"en": "duplicate usernames", "fr": "identifiants de comptes en double"},
+    "v_scope_path": {"en": "invalid folder path", "fr": "chemin de dossier invalide"},
     "v_ge": {"en": "must be ≥ {n}", "fr": "doit être ≥ {n}"},
     "v_le": {"en": "must be ≤ {n}", "fr": "doit être ≤ {n}"},
     "v_extra": {"en": "unknown key", "fr": "clé inconnue"},

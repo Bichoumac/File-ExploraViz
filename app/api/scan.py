@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from ..i18n import ApiError, lang_of, tr
 from ..timeutil import iso
-from .deps import Context, ctx_of, require_user
+from .deps import Context, Principal, ctx_of, current_user, require_admin, require_user
 
 router = APIRouter(prefix="/api", tags=["scan"], dependencies=[Depends(require_user)])
 
@@ -21,15 +21,25 @@ class ScanRequest(BaseModel):
     root: str | None = None
 
 
-def full_status(ctx: Context, lang: str) -> dict:
+# Champs de progression masqués aux comptes restreints : ils révèlent des dossiers et des
+# volumes hors de leur périmètre.
+_REDACTED = ("files", "dirs", "bytes", "inaccessible", "expected_files", "files_per_s", "current_root", "current_dir", "roots")
+
+
+def full_status(ctx: Context, lang: str, user: Principal) -> dict:
     st = ctx.scans.status(lang)
     nxt = ctx.scheduler.next_run
     st["next_run"] = iso(nxt) if nxt else None
     st["interval_minutes"] = ctx.cfg.config.scan.interval_minutes
+    if not user.unrestricted:
+        for key in _REDACTED:
+            st[key] = None
+        if st.get("last_scan"):
+            st["last_scan"] = {k: v for k, v in st["last_scan"].items() if k != "roots"}
     return st
 
 
-@router.post("/scan", status_code=202, summary="Lancer un scan (global ou d'une racine)")
+@router.post("/scan", status_code=202, summary="Lancer un scan (global ou d'une racine)", dependencies=[Depends(require_admin)])
 def start_scan(request: Request, body: ScanRequest | None = None) -> dict:
     ctx = ctx_of(request)
     root = body.root if body else None
@@ -39,7 +49,7 @@ def start_scan(request: Request, body: ScanRequest | None = None) -> dict:
     return {"started": True, "message": tr(key, lang_of(request)), "code": key}
 
 
-@router.post("/scan/cancel", summary="Annuler le scan en cours")
+@router.post("/scan/cancel", summary="Annuler le scan en cours", dependencies=[Depends(require_admin)])
 def cancel_scan(request: Request) -> dict:
     ok = ctx_of(request).scans.cancel()
     key = "cancel_requested" if ok else "no_scan_running"
@@ -47,12 +57,12 @@ def cancel_scan(request: Request) -> dict:
 
 
 @router.get("/scan/status", summary="État du scan, dernier et prochain scan")
-def scan_status(request: Request) -> dict:
-    return full_status(ctx_of(request), lang_of(request))
+def scan_status(request: Request, user: Principal = Depends(current_user)) -> dict:
+    return full_status(ctx_of(request), lang_of(request), user)
 
 
 @router.get("/scan/progress", summary="Progression en direct (Server-Sent Events)")
-async def scan_progress(request: Request) -> StreamingResponse:
+async def scan_progress(request: Request, user: Principal = Depends(current_user)) -> StreamingResponse:
     ctx = ctx_of(request)
     lang = lang_of(request)
 
@@ -66,7 +76,7 @@ async def scan_progress(request: Request) -> StreamingResponse:
             if running or version != last_version:
                 last_version = version
                 idle = 0.0
-                yield f"event: progress\ndata: {json.dumps(full_status(ctx, lang), ensure_ascii=False)}\n\n"
+                yield f"event: progress\ndata: {json.dumps(full_status(ctx, lang, user), ensure_ascii=False)}\n\n"
             elif idle >= 20:
                 idle = 0.0
                 yield ": ping\n\n"

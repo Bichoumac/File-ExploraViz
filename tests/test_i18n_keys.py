@@ -15,6 +15,7 @@ DYNAMIC = {
     "ex.preset.": ["all", "7d", "30d", "year", "gt1y", "gt5y", "custom"],
     "scan.status.": ["idle", "running", "cancelling", "done", "cancelled", "error"],
     "st.age.": [str(i) for i in range(7)],
+    "usr.role.": ["admin", "viewer"],
 }
 
 

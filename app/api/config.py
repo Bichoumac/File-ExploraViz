@@ -13,10 +13,10 @@ from ..config import DEFAULT_EXCLUSIONS, ConfigError
 from ..i18n import ApiError, lang_of, tr
 from ..store import Store
 from ..summary import build_summary
-from .deps import Context, ctx_of, require_user
+from .deps import Context, ctx_of, require_admin
 
 log = logging.getLogger("config")
-router = APIRouter(prefix="/api", tags=["configuration"], dependencies=[Depends(require_user)])
+router = APIRouter(prefix="/api", tags=["configuration"], dependencies=[Depends(require_admin)])
 
 
 def _payload(ctx: Context) -> dict:

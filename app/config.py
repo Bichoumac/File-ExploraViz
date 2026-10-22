@@ -8,12 +8,13 @@ import re
 import secrets
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .categories import CATEGORY_IDS, DEFAULT_MAPPING, normalize_ext
 from .i18n import DEFAULT_LANG, tr
+from .pathsec import PathError, normalize_rel
 from .settings import Settings
 from .yamlio import read_yaml, write_yaml
 
@@ -33,6 +34,7 @@ def _verr(key: str, **params: str) -> ValueError:
     """Erreur de validation désignée par une clé de app/i18n.py (traduite à l'affichage)."""
     return ValueError(f"{_CODE}{key}{_CODE}{json.dumps(params, ensure_ascii=False)}")
 ROOT_ID_RE = r"^[A-Za-z0-9._-]{1,64}$"
+USERNAME_RE = r"^[A-Za-z0-9._@-]{1,64}$"
 
 
 class Strict(BaseModel):
@@ -88,11 +90,62 @@ class UIConfig(Strict):
     page_size: int = Field(100, ge=10, le=1000)
 
 
+class Scope(Strict):
+    """Dossier autorisé pour un compte : ``path`` (relatif à la racine) et toute sa sous-arborescence."""
+
+    root: str = Field(pattern=ROOT_ID_RE)
+    path: str = ""
+
+    @field_validator("path")
+    @classmethod
+    def _path(cls, v: str) -> str:
+        try:
+            return normalize_rel(v)
+        except PathError:
+            raise _verr("v_scope_path") from None
+
+
+class UserConfig(Strict):
+    username: str = Field(pattern=USERNAME_RE)
+    password_hash: str = Field(min_length=1)
+    role: Literal["admin", "viewer"] = "viewer"
+    all_folders: bool = False  # viewer : True = tous les dossiers, sinon seulement ``scopes``
+    scopes: list[Scope] = Field(default_factory=list)
+
+
 class AuthConfig(Strict):
-    username: str | None = Field(None, min_length=1, max_length=64)
-    password_hash: str | None = None
+    users: list[UserConfig] = Field(default_factory=list)
     session_hours: int = Field(168, ge=1, le=24 * 365)
     secret: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_single_account(cls, data: Any) -> Any:
+        """Version 1.0 : un seul compte (``username``/``password_hash``) devient un administrateur."""
+        if isinstance(data, dict) and ("username" in data or "password_hash" in data):
+            data = dict(data)
+            username, password_hash = data.pop("username", None), data.pop("password_hash", None)
+            if username and password_hash and not data.get("users"):
+                data["users"] = [{"username": username, "password_hash": password_hash, "role": "admin"}]
+        return data
+
+    @model_validator(mode="after")
+    def _unique_users(self) -> AuthConfig:
+        names = [u.username.lower() for u in self.users]
+        if len(names) != len(set(names)):
+            raise _verr("v_duplicate_users")
+        return self
+
+    def find(self, username: str | None) -> UserConfig | None:
+        """Compte par identifiant, sans tenir compte de la casse."""
+        if not username:
+            return None
+        low = username.lower()
+        return next((u for u in self.users if u.username.lower() == low), None)
+
+    @property
+    def admins(self) -> list[UserConfig]:
+        return [u for u in self.users if u.role == "admin"]
 
 
 class AppConfig(Strict):
@@ -200,6 +253,11 @@ class ConfigManager:
     def config(self) -> AppConfig:
         return self._config
 
+    @property
+    def lock(self) -> threading.RLock:
+        """Verrou à tenir pour modifier puis enregistrer la configuration (comptes, réglages)."""
+        return self._lock
+
     def load(self) -> AppConfig:
         with self._lock:
             if self.path.exists():
@@ -287,5 +345,5 @@ class ConfigManager:
 
     def public_dict(self) -> dict[str, Any]:
         data = self._config.model_dump(mode="json")
-        data["auth"] = {"username": data["auth"]["username"], "session_hours": data["auth"]["session_hours"]}
+        data["auth"] = {"session_hours": data["auth"]["session_hours"]}  # comptes : voir /api/users
         return data
