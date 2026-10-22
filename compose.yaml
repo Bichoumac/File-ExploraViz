@@ -1,24 +1,21 @@
-# File ExploraViz — standalone `docker compose` (builds the image from this repository).
-# ${...} values come from the .env file (see .env.example).
+# File ExploraViz — works as-is with Dockge (TrueNAS SCALE) and with `docker compose up -d`.
+# ${...} values come from the .env file next to this one (see .env.example).
+# Only the "Directories to scan" lines need editing.
 
 services:
   file-exploraviz:
-    # Image built locally from this repository (docker compose up -d --build).
-    # For Dockge on TrueNAS, use the compose file from the README instead (section "Installing
-    # on TrueNAS SCALE with Dockge"): the image is built once from the Shell.
-    image: ${FEV_IMAGE:-file-exploraviz:local}
-    build:
-      context: ${FEV_BUILD_CONTEXT:-.}
+    # Ready-made image (linux/amd64 and linux/arm64), published from GitHub.
+    # FEV_TAG: "latest" (last release), a version such as "1.0.0", or "edge" (main branch).
+    image: ghcr.io/bichoumac/file-exploraviz:${FEV_TAG:-latest}
     container_name: file-exploraviz
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-8080}:${PORT:-8080}"
+      - "${HOST_PORT:-8080}:8080"
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       SUPPLEMENTARY_GIDS: ${SUPPLEMENTARY_GIDS:-}
       TZ: ${TZ:-Europe/Paris}
-      PORT: ${PORT:-8080}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-15}
@@ -26,9 +23,11 @@ services:
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
     volumes:
-      - ./config:/config          # configuration (config.yaml)
-      - ./cache:/cache            # scan results (YAML) and history
-      # Directories to scan: always read-only (:ro), one sub-folder of /data each.
+      # Application data. APP_DATA defaults to the folder of this file; with Dockge, set an
+      # absolute path in .env (e.g. APP_DATA=/mnt/tank/apps/file-exploraviz).
+      - ${APP_DATA:-.}/config:/config       # settings (config.yaml)
+      - ${APP_DATA:-.}/cache:/cache         # scan results (YAML) and history
+      # Directories to scan: one sub-folder of /data each, ALWAYS read-only (:ro).
       - /mnt/tank/photos:/data/photos:ro
       - /mnt/tank/documents:/data/documents:ro
       # SMB/CIFS share (see the "volumes" section at the bottom of the file):

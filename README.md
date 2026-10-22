@@ -5,10 +5,11 @@ stores the results in **YAML** files and presents them as a filterable file expl
 and a **WinDirStat-style treemap**. It is built for a NAS: the scan runs at low priority
 (`nice 19`, *idle* I/O class) and browsing never touches the disk again.
 
-* Deploy on **TrueNAS SCALE + Dockge** or **standalone Docker**, with the same image.
+* **Ready-made image** on GitHub (`ghcr.io/bichoumac/file-exploraviz`, amd64 + arm64): deploy on
+  **TrueNAS SCALE + Dockge** or **standalone Docker** with one compose file, nothing to build.
 * Mandatory login (bcrypt, signed `HttpOnly`/`SameSite=Strict` cookie, brute-force protection).
-* Light/dark theme, dedicated **mobile layout**, no Internet dependency at runtime.
-* The user interface is currently in **French** (see [Roadmap](#roadmap)).
+* Interface in **English or French** (one-click switch), light/dark theme, dedicated **mobile
+  layout**, no Internet dependency at runtime.
 
 | Explorer | Statistics |
 |---|---|
@@ -69,6 +70,10 @@ colour per category, clickable legend to hide a category, tiny items grouped tog
 (path, size, % of parent, date), click to zoom, double-click to open the folder in the Explorer,
 side panel of sub-folders synchronised with the map.
 
+**Languages**: English by default; the **FR/EN** button in the top bar switches to French. The
+choice is remembered by the browser and sent to the server in a cookie, so API messages (errors,
+scan progress, CSV export headers) follow it as well.
+
 **Mobile layout** (screens 760 px wide or less): bottom tab bar; collapsible folder tree and
 filters panel with an active-filter counter; files shown as cards with a sort drop-down;
 horizontally scrolling categories; touch-friendly treemap (a tap opens a sheet with "Zoom" and
@@ -85,6 +90,8 @@ rescan".
 
 Procedure for TrueNAS SCALE 24.10 ("Electric Eel") or later, which ships Docker natively, with
 [Dockge](https://github.com/louislam/dockge) already installed (**Apps → Discover Apps → Dockge**).
+The ready-made image is pulled from GitHub (`ghcr.io/bichoumac/file-exploraviz`, amd64 and arm64):
+there is nothing to build.
 
 The examples use the pool `tank`, the datasets `tank/photos` and `tank/documents`, and UID/GID
 `3000`. **Replace them everywhere with your own values.** Commands are typed in **System → Shell**
@@ -95,7 +102,6 @@ The examples use the pool `tank`, the datasets `tank/photos` and `tank/documents
 | Path on the NAS | Purpose | Rights of the `exploraviz` user |
 |---|---|---|
 | `/mnt/tank/photos`, `/mnt/tank/documents` | data to analyse | **read-only** (ACL), plus `:ro` mount |
-| `/mnt/tank/apps/file-exploraviz/src` | source code (used to build the image) | none needed |
 | `/mnt/tank/apps/file-exploraviz/config` | `config.yaml` (settings, account) | read/write |
 | `/mnt/tank/apps/file-exploraviz/cache` | scan results (YAML) | read/write |
 
@@ -161,70 +167,47 @@ sudo -u exploraviz find /mnt/tank/photos > /dev/null             # prints nothin
 The last command lists folders that are still unreadable. Fix them by going through step 2 again,
 making sure **Apply permissions recursively** is ticked.
 
-### Step 3 — Prepare the folders and fetch the code
+### Step 3 — Create the application folders
 
 (Optional but recommended: first create the dataset `tank/apps/file-exploraviz` through
 **Datasets → Add Dataset**, preset **Generic**, so it can be backed up with snapshots.)
 
 ```sh
-sudo mkdir -p /mnt/tank/apps/file-exploraviz
-cd /mnt/tank/apps/file-exploraviz
-sudo git clone https://github.com/Bichoumac/File-ExploraViz.git src
-sudo mkdir -p config cache
-sudo chown -R 3000:3000 config cache          # UID:GID from step 1
+sudo mkdir -p /mnt/tank/apps/file-exploraviz/config /mnt/tank/apps/file-exploraviz/cache
+sudo chown -R 3000:3000 /mnt/tank/apps/file-exploraviz       # UID:GID from step 1
 ```
 
-If `git` is not available, download the archive instead of `git clone`:
-
-```sh
-curl -L https://github.com/Bichoumac/File-ExploraViz/archive/refs/heads/main.tar.gz | sudo tar xz
-sudo mv File-ExploraViz-main src
-```
-
-### Step 4 — Build the Docker image
-
-```sh
-sudo docker build -t file-exploraviz:local /mnt/tank/apps/file-exploraviz/src
-sudo docker image ls file-exploraviz          # one line "file-exploraviz  local  …  ~191MB"
-```
-
-Allow 1 to 3 minutes: the NAS downloads `python:3.12-slim` and the dependencies, so it needs
-Internet access. A "legacy builder is deprecated" warning may show up; it is harmless.
-
-> **Why build from the Shell rather than in Dockge?** Dockge runs `docker compose` from inside its
-> own container, which does not necessarily see the `src` folder. Building the image once from the
-> Shell means the Dockge stack only has to use it.
-
-### Step 5 — Create the stack in Dockge
+### Step 4 — Create the stack in Dockge
 
 1. In Dockge, click **+ Compose**.
 2. **Stack Name**: `file-exploraviz`.
 3. Replace the whole content of the **compose.yaml** editor with the file below, then **adapt the
-   `volumes` lines** to your datasets:
+   two "Directories to scan" lines** to your datasets (it is the [`compose.yaml`](compose.yaml) of
+   this repository):
 
    ```yaml
    services:
      file-exploraviz:
-       image: file-exploraviz:local      # built in step 4
-       pull_policy: never                # local image: do not look for it on Docker Hub
+       image: ghcr.io/bichoumac/file-exploraviz:${FEV_TAG:-latest}
        container_name: file-exploraviz
        restart: unless-stopped
        ports:
          - "${HOST_PORT:-8080}:8080"
        environment:
-         PUID: ${PUID}
-         PGID: ${PGID}
+         PUID: ${PUID:-1000}
+         PGID: ${PGID:-1000}
          SUPPLEMENTARY_GIDS: ${SUPPLEMENTARY_GIDS:-}
          TZ: ${TZ:-Europe/Paris}
          ADMIN_USER: ${ADMIN_USER:-admin}
          ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
          SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-15}
          LOG_LEVEL: ${LOG_LEVEL:-INFO}
+         AUTH_DISABLED: ${AUTH_DISABLED:-false}
+         FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
        volumes:
-         # Application data: absolute paths (see the note below)
-         - /mnt/tank/apps/file-exploraviz/config:/config
-         - /mnt/tank/apps/file-exploraviz/cache:/cache
-         # Datasets to analyse: one sub-folder of /data per dataset, ALWAYS :ro
+         - ${APP_DATA:-.}/config:/config
+         - ${APP_DATA:-.}/cache:/cache
+         # Directories to scan: one sub-folder of /data each, ALWAYS read-only (:ro)
          - /mnt/tank/photos:/data/photos:ro
          - /mnt/tank/documents:/data/documents:ro
        read_only: true
@@ -245,15 +228,14 @@ Internet access. A "legacy builder is deprecated" warning may show up; it is har
    ```
 
    * **One line per dataset**: `path-on-the-NAS:/data/<name>:ro`. `<name>` becomes the root name in
-     the UI (it can be renamed later in **Configuration**).
-   * **Absolute paths** for `config` and `cache`: Dockge runs `docker compose` from its own
-     container, so a relative path such as `./config` could point somewhere other than the stack
-     folder.
+     the UI (it can be renamed later in **Settings**).
    * The right-hand port (`8080`) stays as is. To publish another port, change `HOST_PORT`.
 
 4. In the **.env** editor (below the compose editor in Dockge), paste:
 
    ```ini
+   FEV_TAG=latest
+   APP_DATA=/mnt/tank/apps/file-exploraviz
    PUID=3000
    PGID=3000
    HOST_PORT=8080
@@ -263,43 +245,42 @@ Internet access. A "legacy builder is deprecated" warning may show up; it is har
    SCAN_INTERVAL_MINUTES=15
    ```
 
+   * `APP_DATA`: the folder of step 3, as an **absolute path**. Dockge runs `docker compose` from
+     its own container, so the default (`.`, the stack folder) may point somewhere unexpected.
    * `PUID`/`PGID`: the UID and GID written down in step 1.
    * Empty `ADMIN_PASSWORD` (recommended): the **first visitor** of the page creates the account, so
      do it right after deploying. If you fill it in, the password stays in clear text in Dockge's
      `.env`: empty it after the first start (it is only used for initialisation).
    * Is the ACL granted to a group other than the user's primary group? Add
      `SUPPLEMENTARY_GIDS=<gid>` (several values separated by commas).
+   * `FEV_TAG`: `latest` follows releases; set a version (e.g. `1.0.0`) to pin it.
 
-5. Click **Deploy**. The stack logs should show, in this order (log messages are in French):
+5. Click **Deploy**. Dockge pulls the image (about 190 MB once extracted), then the stack logs
+   should show, in this order:
    ```
    msg="exécution en tant que 3000:3000"
    msg="nouvelle racine détectée" root=photos folder=photos
    msg="File ExploraViz démarré" version=1.0.0 port=8080
    ```
-   then, about ten seconds later, `msg="scan terminé"` (the first scan starts by itself).
-6. Open `http://<nas-ip>:8080` and create the account (or log in with `ADMIN_PASSWORD`).
+   then, about ten seconds later, `msg="scan terminé"` (the first scan starts by itself; log
+   messages are in French).
+6. Open `http://<nas-ip>:8080` and create the account (or log in with `ADMIN_PASSWORD`). The
+   **FR/EN** button in the top bar switches the interface language.
 
-### Step 6 — Check that everything is right
+### Step 5 — Check that everything is right
 
 * In Dockge, the container becomes **healthy** within a minute of starting.
 * The logs contain **no** warning `… est accessible en écriture : montez-le en lecture seule (:ro)`
   ("is writable: mount it read-only"). Otherwise a volume is missing `:ro`.
-* **Configuration → Racines à scanner** (roots to scan): each dataset shows the **monté** (mounted)
-  state.
-* **Statistiques → Éléments inaccessibles** (inaccessible items) is 0. Otherwise the list shows the
-  refused folders: go through step 2 again for them.
+* **Settings → Roots to scan**: each dataset shows the **mounted** state.
+* **Statistics → Inaccessible items** is 0. Otherwise the list shows the refused folders: go
+  through step 2 again for them.
 
 ### Updating
 
-```sh
-cd /mnt/tank/apps/file-exploraviz/src
-sudo git pull                                  # or download the archive again (step 3)
-sudo docker build -t file-exploraviz:local .
-```
-
-Then click **Update** in Dockge. The `pull` is skipped thanks to `pull_policy: never` and the
-container is recreated with the new image. Settings and results are kept, since they live in
-`config/` and `cache/`. To free the old image: `sudo docker image prune -f`.
+In Dockge, click **Update**: it pulls the newest image for `FEV_TAG` and recreates the container.
+Settings and results are kept, since they live in `config/` and `cache/`. To free the old image:
+`sudo docker image prune -f`.
 
 ### Adding or removing a dataset
 
@@ -307,26 +288,26 @@ container is recreated with the new image. Settings and results are kept, since 
 2. In Dockge: **Edit**, add the line `- /mnt/tank/<dataset>:/data/<name>:ro`, then **Save** and
    **Deploy**.
 3. The new root is detected at startup and included in the next scan. Each root also has its own
-   **Scanner** (scan) button in **Configuration**.
+   **Scan** button in **Settings**.
 
-To remove a dataset, delete its volume line. The root then shows as **absent** in
-**Configuration**, where you can disable it.
+To remove a dataset, delete its volume line. The root then shows as **missing** in **Settings**,
+where you can disable it.
 
 ### Uninstalling
 
 In Dockge: **Stop**, then **Delete**. Then, in the Shell:
-`sudo docker image rm file-exploraviz:local && sudo rm -rf /mnt/tank/apps/file-exploraviz`.
+`sudo docker image rm ghcr.io/bichoumac/file-exploraviz:latest && sudo rm -rf /mnt/tank/apps/file-exploraviz`.
 Finally, delete the `exploraviz` user and group (Credentials) and the ACL entries added in step 2.
 
 ### Common Dockge problems
 
 | Message | Cause and fix |
 |---|---|
-| `pull access denied for file-exploraviz` | The image has not been built (step 4), or the `pull_policy: never` line is missing. |
+| `denied` or `unauthorized` when pulling `ghcr.io/...` | The NAS has no Internet access, or the image name/tag is mistyped. |
 | `bind source path does not exist: /mnt/...` | Wrong volume path: check it with `ls` in the Shell. |
 | `port is already allocated` | Port 8080 is used by another app: change `HOST_PORT` in the `.env`. |
 | The container keeps restarting | Read the logs. Usually `config/` is not owned by `PUID:PGID` (redo the `chown` of step 3), or `config.yaml` is invalid (the faulty key is named). |
-| Empty roots or "Éléments inaccessibles" | Incomplete read rights: redo the check of step 2. |
+| Empty roots or "Inaccessible items" | Incomplete read rights: redo the check of step 2. |
 
 ### Variant: SMB/CIFS share from another machine
 
@@ -350,18 +331,19 @@ Then add `- nas-smb:/data/share:ro` to the service `volumes`, and `SMB_HOST`, `S
 
 ## Standalone installation (Docker Compose)
 
-On any host with Docker Engine 24+ and the Compose v2 plugin:
+On any host with Docker Engine 24+ and the Compose v2 plugin (amd64 or arm64, e.g. a Raspberry Pi 4/5):
 
 ```sh
-git clone https://github.com/Bichoumac/File-ExploraViz.git
-cd File-ExploraViz
-cp .env.example .env            # PUID/PGID = `id -u` / `id -g` of a user that can read your data
-$EDITOR compose.yaml            # replace the /mnt/tank/... volumes with your directories (:ro)
-docker compose up -d --build
+mkdir file-exploraviz && cd file-exploraviz
+curl -fsSLO https://raw.githubusercontent.com/Bichoumac/File-ExploraViz/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/Bichoumac/File-ExploraViz/main/.env.example
+$EDITOR compose.yaml            # replace the /mnt/tank/... lines with your directories (:ro)
+$EDITOR .env                    # PUID/PGID = `id -u` / `id -g` of a user that can read your data
+docker compose up -d
 docker compose logs -f          # "File ExploraViz démarré", then "scan terminé"
 ```
 
-UI: `http://localhost:8080`. Update: `git pull && docker compose up -d --build`.
+UI: `http://localhost:8080`. Update: `docker compose pull && docker compose up -d`.
 
 Behind a reverse proxy (Traefik, Caddy, Nginx Proxy Manager…), set `FORWARDED_ALLOW_IPS` to the
 proxy IP. The session cookie then gets the `Secure` attribute over HTTPS. If the proxy already
@@ -378,7 +360,9 @@ authenticates users, you may set `AUTH_DISABLED=true`.
 | `PUID` / `PGID` | `1000` | Runtime user and group. The container starts as root only to hand `/config` and `/cache` over to them, then drops privileges for good. |
 | `SUPPLEMENTARY_GIDS` | *(empty)* | Extra groups, comma-separated (e.g. a group holding a read ACL). |
 | `TZ` | `Europe/Paris` | Time zone of logs, history and the off-peak window. |
-| `PORT` | `8080` | Listening port inside the container (`HOST_PORT`: port published on the host). |
+| `FEV_TAG` | `latest` | Image tag used by `compose.yaml`: `latest` (last release), a version such as `1.0.0`, or `edge` (main branch). |
+| `APP_DATA` | `.` | Folder holding `config/` and `cache/` on the host (absolute path recommended with Dockge). |
+| `HOST_PORT` | `8080` | Port published on the host (the container listens on `PORT`, 8080 by default). |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / *(empty)* | Account created **on first start only**. Empty: account creation screen in the UI. |
 | `SCAN_INTERVAL_MINUTES` | `15` | **Initial** interval (then editable in the UI; 0 = disabled). |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. In `DEBUG`, every HTTP request is logged. |
@@ -473,7 +457,7 @@ and 61 MB RAM.
 
 ## Troubleshooting
 
-**"Aucun dossier détecté sous /data" (no folder under /data) / root shown as "absent"**
+**"No folder detected under /data" / root shown as "missing"**
 The volume is not mounted under `/data/<name>`. Check the `volumes` section of the compose file,
 then `docker exec file-exploraviz ls -la /data`.
 
@@ -515,7 +499,7 @@ named) or a non-writable `/config` (host folder permissions).
 ```sh
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
-pytest                                           # 51 tests (scanner, filters, aggregates, security, YAML, auth, API)
+pytest                                           # 56 tests (scanner, filters, aggregates, security, YAML, auth, API, i18n)
 
 # Run locally on a test folder
 python scripts/gen_tree.py ./data/demo --files 5000
@@ -524,12 +508,29 @@ FEV_CONFIG_DIR=./config FEV_CACHE_DIR=./cache FEV_DATA_DIR=./data PORT=8080 pyth
 # Benchmarks
 python scripts/bench.py --files 1000000          # synthetic index: memory, latencies
 python scripts/gen_tree.py /tmp/data/demo --files 200000 && python scripts/bench_scan.py /tmp/data/demo
+
+# Run a locally built image with the regular compose.yaml
+docker build -t ghcr.io/bichoumac/file-exploraviz:dev .
+FEV_TAG=dev docker compose up -d
+```
+
+**Translations**: UI strings live in [`web/assets/i18n.js`](web/assets/i18n.js) (`en` and `fr`
+dictionaries, `t('key', {param})`, `_one` suffix for singular forms); API messages live in
+[`app/i18n.py`](app/i18n.py). `tests/test_i18n_keys.py` fails if a key is missing in one language
+or if French text is hard-coded in the UI modules.
+
+**Releases**: [`.github/workflows/docker.yml`](.github/workflows/docker.yml) runs the tests, then
+builds the amd64 + arm64 image. Every push to `main` publishes `:edge`; pushing a tag `vX.Y.Z`
+publishes `:X.Y.Z`, `:X.Y`, `:X` and `:latest`:
+
+```sh
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 Layout: `app/` (backend: `scanner`, `yamlio`, `store`, `aggregates`, `scan_manager`, `scheduler`,
 `auth`, `config`, `api/`), `web/` (static frontend as ES modules, no build step), `tests/`,
-`scripts/`, `docs/ARCHITECTURE.md` (formats and API). Source code comments and UI strings are in
-French.
+`scripts/`, `docs/ARCHITECTURE.md` (formats and API). Source code comments and log messages are
+in French.
 
 ---
 
@@ -539,7 +540,7 @@ French.
 * **Not yet tested on a real TrueNAS/Dockge install.** The Dockge procedure was replayed with
   Docker 29.1 under WSL2 (deploy, update after rebuild, permissions); TrueNAS menu names may differ
   slightly between versions.
-* **No published image**: it has to be built locally (step 4 above).
+* The published image is built for `linux/amd64` and `linux/arm64` only (no 32-bit ARM).
 * Single process, single worker: the scan thread shares the Python GIL with the API, so requests
   are a little slower while a scan runs.
 
@@ -564,7 +565,8 @@ French.
 * The treemap expands at most ~4,000 nodes per view; deeper levels are loaded when zooming.
 
 **Interface**
-* The UI and log messages are **in French only**.
+* The UI and API messages exist in **English and French only**; log messages and source comments
+  are in French. Native date pickers follow the browser's language, not the app's.
 * Name search is case-insensitive but **not accent-insensitive** (`ete` does not match `été`), and
   globs only support `*` and `?` (no `[...]` classes).
 * Sorting by name uses code-point order of the lower-cased name, not a locale-aware order.
@@ -584,31 +586,9 @@ French.
 ## Roadmap
 
 Ideas for future work, roughly by value for effort. Each item says *why* and gives a *how to*
-starting point.
+starting point. (Done since the first version: published multi-arch image, CI, English/French UI.)
 
-1. **Publish a ready-made image (GHCR, amd64 + arm64)**
-   *Why:* removes steps 3–4 of the Dockge procedure; Dockge's **Update** button would then really
-   pull new versions.
-   *How to:* add `.github/workflows/docker.yml` using `docker/setup-qemu-action`,
-   `docker/setup-buildx-action`, `docker/login-action` (registry `ghcr.io`, `GITHUB_TOKEN`) and
-   `docker/build-push-action` with `platforms: linux/amd64,linux/arm64`, triggered on tags `v*`.
-   Then replace `image: file-exploraviz:local` / `pull_policy: never` with
-   `image: ghcr.io/bichoumac/file-exploraviz:latest` in the README.
-
-2. **Continuous integration**
-   *Why:* catch regressions on every push.
-   *How to:* a GitHub Actions workflow running `pip install -r requirements-dev.txt && pytest` on
-   `ubuntu-latest` (the POSIX-only tests then run too), plus `docker build` to check the image.
-
-3. **English (and multilingual) user interface**
-   *Why:* the UI is French only.
-   *How to:* move every UI string from `web/assets/*.js` into `web/assets/i18n/fr.js` and `en.js`
-   (plain objects), add a `t(key, params)` helper in `util.js`, pick the language from
-   `navigator.language` with an override stored in `localStorage`, and translate category labels
-   in `app/categories.py` on the client side (keep the ids). API error messages can return a
-   `code` field alongside the French text so the client can translate them.
-
-4. **Incremental scans**
+1. **Incremental scans**
    *Why:* full rescans of millions of files are slow on spinning disks.
    *How to:* store each folder's `mtime` in its index document (`app/scanner.py`,
    `IndexWriter.write_dir`). On the next scan, when a folder's `mtime` is unchanged, reuse its file
@@ -616,56 +596,61 @@ starting point.
    changes when entries are added, removed or renamed, not when a file's content or size changes,
    so keep a periodic full scan (e.g. nightly) as an option in `ScanConfig`.
 
-5. **Faster startup with a binary cache**
+2. **Faster startup with a binary cache**
    *Why:* 5 s per million files to rebuild the index from YAML.
    *How to:* after building a `Store`, save its numpy columns with `numpy.savez` next to the YAML
    (e.g. `/cache/store_<root>.npz`, plus names and folder paths) with a format version and the YAML
    `footer` timestamp. At startup, load the `.npz` when it matches the YAML; otherwise fall back to
    `load_root_part`. YAML stays the source of truth.
 
-6. **Disk usage vs apparent size**
+3. **Disk usage vs apparent size**
    *Why:* on ZFS with compression, apparent sizes overstate real usage.
    *How to:* also record `st_blocks * 512` in the scanner (one more column in the index row and in
    `RootPart`/`Store`), then add a "size on disk" toggle in the Explorer, Statistics and Treemap.
 
-7. **Real creation dates**
+4. **Real creation dates**
    *Why:* `st_ctime` is not the birth time on Linux.
    *How to:* call the `statx(2)` syscall through `ctypes` with `STATX_BTIME` in `scanner.py`
    (fall back to `st_ctime` when the filesystem does not report it), and label the column
    accordingly.
 
-8. **Content-based duplicate confirmation**
+5. **Content-based duplicate confirmation**
    *Why:* the name + size heuristic produces false positives.
    *How to:* an optional, low-priority job that, for each candidate group from
    `aggregates._duplicates`, hashes the first and last 64 KB, then the full file (BLAKE2) only for
    remaining collisions; results cached in `/cache/hashes.yaml` keyed by `(path, size, mtime)`.
    The files are opened read-only, which is compatible with the `:ro` mounts.
 
-9. **Alerts and monitoring**
+6. **Alerts and monitoring**
    *Why:* be warned when a share grows fast or inaccessible items appear.
    *How to:* expose a Prometheus `/metrics` endpoint (totals per root and per category, scan
    duration) and/or a configurable webhook (Gotify, ntfy, Discord) fired at the end of a scan in
    `ScanManager._run` when thresholds from `config.yaml` are crossed.
 
-10. **Accent-insensitive search and locale-aware sorting**
+7. **Accent-insensitive search and locale-aware sorting**
     *How to:* when building the search text in `Store.warm_up`, normalise names with
     `unicodedata.normalize("NFKD", …)` and strip combining marks (`unicodedata.combining`), and
     apply the same normalisation to `q`; for sorting, build the name rank from those normalised
     names.
 
-11. **Multiple users and read-only roles, or SSO**
+8. **Multiple users and read-only roles, or SSO**
     *How to:* turn `AuthConfig` into a list of users with a `role` field (`admin` / `viewer`),
     check the role in a dependency used by mutating routes (`/api/scan`, `/api/config`,
     `/api/cache/clear`); or delegate to an OIDC provider (Authelia, Authentik) via the reverse
     proxy and `AUTH_DISABLED=true`.
 
-12. **Per-root schedules**
+9. **Per-root schedules**
     *How to:* add an optional `interval_minutes` to `RootConfig`, let `Scheduler.compute_next`
     pick the earliest due root, and call `ScanManager.start([root_id], "planifié")`.
 
-13. **Frontend end-to-end tests**
+10. **Frontend end-to-end tests**
     *How to:* Playwright tests (desktop and mobile viewports) against the app started on
     generated data (`scripts/gen_tree.py`), run in the CI workflow.
+
+11. **More languages, and English log messages**
+    *How to:* add a dictionary to `web/assets/i18n.js` and `app/i18n.py` (the tests check that
+    every language has the same keys) and turn the language button into a menu; for logs, translate
+    the `log.info(...)` messages in `app/` (they are plain strings with structured extras).
 
 ---
 
@@ -694,6 +679,11 @@ Choices made outside, or on top of, the original specification:
     in both light and dark themes. A category is always shown with an icon or a label as well.
 11. Extra routes: `/api/auth/state`, `/api/auth/setup`, `/api/auth/password`, `/api/extensions`,
     `/api/cache/clear`.
+12. **Language of API messages chosen by a cookie** (`fev_lang`, set by the UI) rather than
+    `Accept-Language`: the in-app switch then applies to everything, including the SSE progress
+    stream and CSV downloads. Errors also carry a stable `code` field.
+13. **Release tags**: `latest` follows tagged releases and `edge` follows `main`, so a Dockge
+    **Update** never picks up unreleased work by accident.
 
 ## License
 

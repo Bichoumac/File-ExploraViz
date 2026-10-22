@@ -38,6 +38,7 @@ Deviations from the original specification are listed at the end (§ 6).
 | `scan_manager.py` | "One scan at a time" lock, low-priority thread, progress, cancellation, summary/history writing, Store swap. |
 | `scheduler.py` | asyncio loop: interval (15 min by default), optional off-peak window. |
 | `auth.py` | bcrypt, HMAC-signed session tokens, brute-force throttling. |
+| `i18n.py` | API messages in English/French (`ApiError`, `tr`, `lang_of`). |
 | `entrypoint.py` | Container entry point: applies `PUID`/`PGID`, then starts uvicorn. |
 | `api/*.py` | FastAPI routers (auth, files, stats, treemap, scan, config). |
 | `main.py` | Application factory, lifespan, GZip, static files. |
@@ -173,7 +174,10 @@ Every `/api/*` route requires a session, except `auth/state`, `auth/login` and `
 
 Common parameters: `ext` and `category` are comma-separated lists; `from`/`to` use `YYYY-MM-DD`;
 `sort` is `name|path|ext|category|size|mtime|ctime`, prefixed with `-` for descending order; `q` is
-a substring, or a glob when it contains `*` or `?`. API messages are in French.
+a substring, or a glob when it contains `*` or `?`.
+
+API messages are returned in English or French depending on the `fev_lang` cookie set by the UI
+(English by default); errors are `{"detail": "…", "code": "stable_key"}` (see `app/i18n.py`).
 
 ## 6. Deviations from the specification
 
