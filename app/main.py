@@ -26,6 +26,7 @@ from .i18n import ApiError, lang_of, tr
 from .scan_manager import AppState, ScanManager
 from .scheduler import Scheduler
 from .settings import Settings
+from .store import SearchTimeout
 
 log = logging.getLogger("app")
 
@@ -124,6 +125,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Traduit le message d'erreur dans la langue de l'utilisateur (cookie fev_lang)."""
         detail = tr(exc.key, lang_of(request), **exc.params)
         return JSONResponse({"detail": detail, "code": exc.key}, status_code=exc.status_code, headers=exc.headers)
+
+    @app.exception_handler(SearchTimeout)
+    async def search_timeout(request: Request, exc: SearchTimeout) -> JSONResponse:
+        return await api_error(request, ApiError(400, "regex_timeout"))
 
     @app.get("/healthz", tags=["système"], summary="Healthcheck")
     def healthz() -> dict:

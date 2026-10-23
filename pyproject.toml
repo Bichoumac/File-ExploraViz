@@ -1,6 +1,6 @@
 [project]
 name = "file-exploraviz"
-version = "1.0.0"
+version = "1.2.0"
 description = "Explorateur et visualiseur de fichiers auto-hébergé (lecture seule)"
 requires-python = ">=3.12"
 

@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -80,7 +81,7 @@ def write_index(path: Path, n_files: int, per_dir: int, seed: int) -> int:
                 name = f"{rnd.choice(WORDS)}_{written:08d}" + (f".{ext}" if ext else "")
                 size = int(rnd.lognormvariate(11, 2.5))
                 mt = now - int(rnd.expovariate(1 / (3 * 365 * 86400)))
-                rows.append((name, ext, CATEGORY_IDS[ext_map.get(ext, OTHER)], size, mt, mt))
+                rows.append((name, ext, CATEGORY_IDS[ext_map.get(ext, OTHER)], size, mt, mt, mt))
                 written += 1
             rows.sort(key=lambda r: (r[0].lower(), r[0]))
             w.write_dir(p, rows)
@@ -149,6 +150,12 @@ def main() -> None:
             ("Filtre catégorie + taille", q + "&category=video,audio&min_size=1000000"),
             ("Recherche sous-chaîne", q + "&q=vacances_0001"),
             ("Recherche glob", q + "&q=*_00012*.jp*g"),
+            ("Recherche regex (noms)", q + "&" + urlencode({"q_mode": "regex", "q": r"^vacances_0001\d+\.jpe?g$"})),
+            ("Recherche nom de dossier", q + "&" + urlencode({"q_scope": "folder", "q": "vacances_0001"})),
+            ("Recherche dossier, glob", q + "&" + urlencode({"q_scope": "folder", "q": "films_00*1"})),
+            ("Recherche dossier, regex", q + "&" + urlencode({"q_scope": "folder", "q_mode": "regex", "q": r"^films_00\d1$"})),
+            ("Recherche chemin, glob", q + "&" + urlencode({"q_scope": "path", "q": "*films_*/*.mp4"})),
+            ("Recherche chemin, regex", q + "&" + urlencode({"q_scope": "path", "q_mode": "regex", "q": r"films_\d+/[^/]+\.mp4$"})),
             ("Bandeau (stats légères)", "/api/stats?root=bench&detail=false"),
             ("Statistiques complètes", "/api/stats?root=bench"),
             ("Statistiques filtrées", "/api/stats?root=bench&ext=pdf,docx"),

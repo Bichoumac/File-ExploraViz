@@ -5,6 +5,7 @@
 * Les informations de ``DirEntry`` (type d'entrée sans appel système, ``stat`` mis en cache)
   sont réutilisées : un seul ``stat`` par fichier, aucun par dossier.
 * Lecture seule stricte : on n'ouvre jamais un fichier, on ne fait que lister et ``stat``.
+* Le ``stat`` passe par ``fsstat`` (``statx`` sous Linux) pour obtenir la vraie date de création.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .categories import CATEGORY_IDS, OTHER, ext_of
+from .fsstat import BIRTH_SOURCE, make_stat
 from .pathsec import is_within, within_any
 from .timeutil import iso
 from .yamlio import IndexWriter, clean_text
@@ -85,8 +87,9 @@ def scan_root(
     follow = opts.follow_symlinks
     max_depth = opts.max_depth
     bases = opts.allowed_bases or [base]
+    stat_of = make_stat()
 
-    n_files = n_dirs = n_bytes = n_inacc = n_links = 0
+    n_files = n_dirs = n_bytes = n_inacc = n_links = n_birth = 0
     visited_links: set[str] = set()
     progress.current_root = root_id
 
@@ -106,7 +109,7 @@ def scan_root(
             progress.current_dir = rel or "/"
             progress.pending_dirs = len(stack)
 
-            files: list[tuple[str, str, str, int, int, int]] = []
+            files: list[tuple[str, str, str, int, int, int, int | None]] = []
             errors: list[tuple[str, str]] = []
             subdirs: list[tuple[str, str]] = []  # (nom, chemin absolu à parcourir)
             dir_error: str | None = None
@@ -124,7 +127,7 @@ def scan_root(
                                 subdirs.append((name, entry.path))
                                 continue
                             if entry.is_file(follow_symlinks=False):
-                                st = entry.stat(follow_symlinks=False)
+                                st = stat_of(entry, False)
                             elif entry.is_symlink():
                                 if not follow:
                                     n_links += 1
@@ -134,8 +137,8 @@ def scan_root(
                                 if not within_any(target, bases):
                                     n_links += 1
                                     continue
-                                st = os.stat(target)
-                                if stat_mod.S_ISDIR(st.st_mode):
+                                st = stat_of(target, True)
+                                if stat_mod.S_ISDIR(st[0]):
                                     # Pas de boucle : ni cible déjà visitée, ni ancêtre du dossier courant.
                                     if target in visited_links or is_within(os.path.realpath(abspath), target):
                                         n_links += 1
@@ -143,7 +146,7 @@ def scan_root(
                                     visited_links.add(target)
                                     subdirs.append((name, target))
                                     continue
-                                if not stat_mod.S_ISREG(st.st_mode):
+                                if not stat_mod.S_ISREG(st[0]):
                                     continue
                             else:
                                 continue  # socket, FIFO, périphérique : ignorés
@@ -152,11 +155,11 @@ def scan_root(
                             continue
                         clean = clean_text(name)
                         ext = ext_of(clean)
-                        size = st.st_size
-                        files.append(
-                            (clean, ext, cat_names[ext_map.get(ext, OTHER)], size, int(st.st_mtime), int(st.st_ctime))
-                        )
+                        _, size, mtime, ctime, btime = st
+                        files.append((clean, ext, cat_names[ext_map.get(ext, OTHER)], size, mtime, ctime, btime))
                         n_bytes += size
+                        if btime is not None:
+                            n_birth += 1
             except OSError as exc:
                 dir_error = _errmsg(exc)
                 n_inacc += 1
@@ -192,11 +195,15 @@ def scan_root(
             "bytes": n_bytes,
             "inaccessible": n_inacc,
             "symlinks_skipped": n_links,
+            "birth_times": n_birth,
             "duration_s": round(finished - started, 3),
         }
         writer.close(footer)
     log.info(
         "racine scannée",
-        extra={"root": root_id, "files": n_files, "dirs": n_dirs, "bytes": n_bytes, "duration_s": footer["duration_s"]},
+        extra={
+            "root": root_id, "files": n_files, "dirs": n_dirs, "bytes": n_bytes, "duration_s": footer["duration_s"],
+            "birth_times": n_birth, "birth_source": BIRTH_SOURCE,
+        },
     )
     return footer

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from array import array
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import regex
 
 from .categories import CATEGORY_IDS, CATEGORY_INDEX, CATEGORY_LABELS, NCAT, OTHER
 from .yamlio import DirRecord, IndexFormatError, iter_index_fast, iter_index_yaml
@@ -33,6 +35,11 @@ FLAG_ERROR = 1
 FLAG_TRUNCATED = 2
 
 SORT_FIELDS = ("name", "path", "ext", "category", "size", "mtime", "ctime")
+Q_SCOPES = ("file", "folder", "path")  # nom du fichier, nom d'un dossier parent, chemin relatif
+Q_MODES = ("text", "regex")  # sous-chaîne ou glob (selon le motif), expression régulière
+REGEX_BUDGET_S = 10.0  # durée maximale d'une recherche par expression régulière
+_REGEX_CHUNK = 65536  # noms découpés par blocs : pas de liste d'un million de chaînes
+NO_BIRTH = -(2**63)  # btime inconnue (colonne absente ou null dans l'index)
 
 
 # --------------------------------------------------------------------------- données d'une racine
@@ -54,7 +61,8 @@ class RootPart:
     ext_id: np.ndarray  # int32 -> exts
     size: np.ndarray  # int64
     mtime: np.ndarray  # int64
-    ctime: np.ndarray  # int64
+    ctime: np.ndarray  # int64, date de création : btime si connue, sinon st_ctime
+    birth: np.ndarray  # bool, ctime est la vraie date de création (btime)
     names: str  # noms concaténés
     name_len: np.ndarray  # int64
     entry_errors: list[tuple[int, str, str]]  # (dossier local, nom, message)
@@ -83,7 +91,7 @@ def _load_part(path: Path, root_id: str, name: str, reader: Callable[[Path], Ite
     records: list[tuple[str, int, int, str | None, int]] = []  # (path, file_start, nfiles, error, flags)
     names: list[str] = []
     ext_ids = array("i")
-    sizes, mtimes, ctimes = array("q"), array("q"), array("q")
+    sizes, mtimes, ctimes, btimes = array("q"), array("q"), array("q"), array("q")
     ext_table: dict[str, int] = {}
     entry_errors: list[tuple[int, str, str]] = []
 
@@ -110,6 +118,10 @@ def _load_part(path: Path, root_id: str, name: str, reader: Callable[[Path], Ite
                     sizes.extend(map(int, cols[3]))
                     mtimes.extend(map(int, cols[4]))
                     ctimes.extend(map(int, cols[5]))
+                    if len(cols) > 6:
+                        btimes.extend([NO_BIRTH if b is None else int(b) for b in cols[6]])
+                    else:  # index antérieur à la colonne btime
+                        btimes.extend([NO_BIRTH] * len(cols[5]))
                 except (IndexError, TypeError, ValueError) as exc:
                     raise IndexFormatError(f"ligne de fichier invalide dans « {rec.path} » : {exc}") from exc
             flags = (FLAG_ERROR if rec.error else 0) | (FLAG_TRUNCATED if rec.truncated else 0)
@@ -123,6 +135,9 @@ def _load_part(path: Path, root_id: str, name: str, reader: Callable[[Path], Ite
     size_arr = np.frombuffer(sizes, dtype=np.int64).copy() if n else np.zeros(0, np.int64)
     mt_arr = np.frombuffer(mtimes, dtype=np.int64).copy() if n else np.zeros(0, np.int64)
     ct_arr = np.frombuffer(ctimes, dtype=np.int64).copy() if n else np.zeros(0, np.int64)
+    bt_arr = np.frombuffer(btimes, dtype=np.int64) if n else np.zeros(0, np.int64)
+    birth = bt_arr != NO_BIRTH
+    ct_arr = np.where(birth, bt_arr, ct_arr)
     name_len = np.fromiter(map(len, names), dtype=np.int64, count=n)
 
     keys = [_path_key(r[0]) for r in records]
@@ -138,7 +153,7 @@ def _load_part(path: Path, root_id: str, name: str, reader: Callable[[Path], Ite
         remap = {old: new for new, old in enumerate(dedup)}
         entry_errors = [(remap[d], nm, m) for d, nm, m in entry_errors if d in remap]
         records = [records[i] for i in dedup]
-        ext_arr, size_arr, mt_arr, ct_arr = ext_arr[perm], size_arr[perm], mt_arr[perm], ct_arr[perm]
+        ext_arr, size_arr, mt_arr, ct_arr, birth = ext_arr[perm], size_arr[perm], mt_arr[perm], ct_arr[perm], birth[perm]
         names = [names[i] for i in perm.tolist()]
         name_len = name_len[perm]
 
@@ -156,6 +171,7 @@ def _load_part(path: Path, root_id: str, name: str, reader: Callable[[Path], Ite
         size=size_arr,
         mtime=mt_arr,
         ctime=ct_arr,
+        birth=birth,
         names="".join(names),
         name_len=name_len,
         entry_errors=entry_errors,
@@ -178,6 +194,8 @@ class FileFilter:
     min_size: int | None = None
     max_size: int | None = None
     q: str = ""
+    q_scope: str = "file"  # voir Q_SCOPES
+    q_mode: str = "text"  # voir Q_MODES
     # Périmètre autorisé (comptes restreints) : intervalles de dossiers [début, fin) fusionnés,
     # en numérotation préfixe ; None = tout. Fait partie de la clé des caches.
     access: tuple[tuple[int, int], ...] | None = None
@@ -218,23 +236,120 @@ class Selection:
         return np.arange(self.lo, self.hi, dtype=np.int64) if self.idx is None else self.idx
 
 
+class QueryError(ValueError):
+    """Motif de recherche invalide (classe ``[...]`` ou expression régulière mal formée)."""
+
+
+class SearchTimeout(Exception):
+    """Expression régulière trop lente : budget REGEX_BUDGET_S dépassé."""
+
+
+def is_glob(q: str) -> bool:
+    return "*" in q or "?" in q
+
+
 def glob_to_regex(pattern: str) -> str:
-    """Glob simple (``*``, ``?``) vers une regex qui ne déborde pas d'un nom (séparateur NUL).
+    """Glob (``*``, ``?``, ``[abc]``, ``[a-z]``, ``[!abc]``) vers une regex qui ne déborde pas
+    d'une entrée (séparateur NUL). Comme pour ``fnmatch``, ``*`` traverse aussi les « / ».
 
     Un ``*`` initial (ou final) n'impose rien : on retire l'ancrage correspondant, ce qui évite
     de tenter une correspondance à chaque début de nom (environ 10 fois plus rapide sur 1 M de noms).
     """
     head = not pattern.startswith("*")
     tail = not pattern.endswith("*")
+    body = pattern.strip("*")
     out = []
-    for ch in pattern.strip("*"):
+    i, n = 0, len(body)
+    while i < n:
+        ch = body[i]
+        i += 1
         if ch == "*":
             out.append("[^\x00]*")
         elif ch == "?":
             out.append("[^\x00]")
+        elif ch == "[":
+            j = i + 1 if i < n and body[i] in "!^" else i
+            if j < n and body[j] == "]":  # « ] » en tête de classe : caractère ordinaire
+                j += 1
+            j = body.find("]", j)
+            if j < 0:  # crochet non fermé : caractère ordinaire
+                out.append(re.escape(ch))
+                continue
+            inner, i = body[i:j], j + 1
+            neg = inner[:1] in ("!", "^")
+            inner = re.sub(r"([&~|\[\\])", r"\\\1", inner[1:] if neg else inner)  # comme fnmatch
+            out.append(f"[^\x00{inner}]" if neg else f"[{inner}]")
         else:
             out.append(re.escape(ch))
     return ("(?<=\x00)" if head else "") + "".join(out) + ("(?=\x00)" if tail else "")
+
+
+def compile_query(q: str, mode: str) -> re.Pattern[str] | regex.Pattern[str]:
+    """Compile une recherche déjà normalisée (voir ``normalize_query``) ; QueryError si invalide."""
+    try:
+        if mode == "regex":
+            return regex.compile(q, regex.IGNORECASE)
+        return re.compile(glob_to_regex(q) if is_glob(q) else re.escape(q))
+    except (re.error, regex.error) as exc:
+        raise QueryError(str(exc)) from exc
+
+
+def normalize_query(q: str, mode: str) -> str:
+    """NUL retiré ; hors regex, espaces de bord retirés et minuscules (le texte cherché l'est)."""
+    q = q.replace("\x00", "")
+    return q if mode == "regex" else q.strip().lower()
+
+
+def _regex_hits(rx: regex.Pattern[str], entries: list[str], deadline: float) -> list[int]:
+    """Indices des entrées où ``rx`` trouve une correspondance, dans le budget de temps.
+
+    Une entrée à la fois (une regex quelconque pourrait sinon déborder d'une entrée sur l'autre),
+    avec le délai restant comme ``timeout`` : une regex pathologique, de type ``(a|aa)+$``, est
+    interrompue. ``concurrent`` libère le GIL pendant la recherche : le serveur reste réactif.
+    """
+    search, clock = rx.search, time.monotonic
+    hits = []
+    try:
+        for i, entry in enumerate(entries):
+            left = deadline - clock()
+            if left <= 0:  # regex accepte un délai négatif comme « pas de délai »
+                raise SearchTimeout()
+            if search(entry, timeout=left, concurrent=True):
+                hits.append(i)
+    except TimeoutError as exc:
+        raise SearchTimeout() from exc
+    return hits
+
+
+def _match_entries(
+    text: str, bounds: np.ndarray, rx: re.Pattern[str] | regex.Pattern[str], deadline: float | None
+) -> np.ndarray:
+    """Masque des entrées de ``text`` qui correspondent à ``rx``.
+
+    ``text`` : les entrées précédées et suivies d'un NUL (voir ``_joined``) ; ``bounds[k]`` est le
+    début de l'entrée ``k`` et ``bounds[-1] = len(text)``. Sans ``deadline``,
+    ``rx`` est un motif sûr qui ne traverse pas les NUL : une seule passe sur tout le texte.
+    """
+    n = len(bounds) - 1
+    mask = np.zeros(n, dtype=bool)
+    if deadline is None:
+        positions = np.fromiter((m.start() for m in rx.finditer(text)), dtype=np.int64)
+        if len(positions):
+            mask[np.searchsorted(bounds, positions, side="right") - 1] = True
+        return mask
+    for a in range(0, n, _REGEX_CHUNK):
+        b = min(a + _REGEX_CHUNK, n)
+        hits = _regex_hits(rx, text[bounds[a] : bounds[b] - 1].split("\x00"), deadline)
+        mask[np.array(hits, dtype=np.int64) + a] = True
+    return mask
+
+
+def _joined(entries: list[str]) -> tuple[str, np.ndarray]:
+    """Texte de recherche (NUL, entrée, NUL, entrée…, NUL) et débuts des entrées, plus ``len(texte)``."""
+    bounds = np.ones(len(entries) + 1, dtype=np.int64)
+    if entries:
+        bounds[1:] += np.cumsum(np.fromiter(map(len, entries), dtype=np.int64, count=len(entries)) + 1)
+    return "\x00" + "\x00".join(entries) + "\x00", bounds
 
 
 class _LRU:
@@ -301,7 +416,8 @@ class Store:
     cat: np.ndarray  # uint8
     size: np.ndarray
     mtime: np.ndarray
-    ctime: np.ndarray
+    ctime: np.ndarray  # date de création : btime si connue, sinon st_ctime
+    birth: np.ndarray  # bool, ctime est la vraie date de création
     file_dir: np.ndarray  # int32
     names: str
     name_off: np.ndarray  # int64, nfiles + 1
@@ -310,7 +426,9 @@ class Store:
     ext_cat: np.ndarray = field(default_factory=lambda: np.zeros(1, np.uint8))  # catégorie de chaque extension
     ext_index: dict[str, int] = field(default_factory=dict)
     _lazy_lock: threading.Lock = field(default_factory=threading.Lock)
-    _search: tuple[str, np.ndarray] | None = None
+    _search: tuple[str, np.ndarray] | None = None  # noms des fichiers en minuscules (voir _joined)
+    _dir_search: tuple[str, np.ndarray] | None = None  # noms des dossiers en minuscules
+    _dir_low: list[str] | None = None  # chemins des dossiers en minuscules
     _name_rank: np.ndarray | None = None
     _name_hash: np.ndarray | None = None
     _hidden: np.ndarray | None = None
@@ -328,7 +446,7 @@ class Store:
         roots: list[RootInfo] = []
         dir_path: list[str] = []
         a_root, a_parent, a_end, a_depth, a_flags, a_fcount = [], [], [], [], [], []
-        a_ext, a_size, a_mt, a_ct, a_nlen = [], [], [], [], []
+        a_ext, a_size, a_mt, a_ct, a_birth, a_nlen = [], [], [], [], [], []
         names: list[str] = []
         dir_error: dict[int, str] = {}
         entry_errors: list[tuple[int, str, str]] = []
@@ -371,6 +489,7 @@ class Store:
             a_size.append(part.size)
             a_mt.append(part.mtime)
             a_ct.append(part.ctime)
+            a_birth.append(part.birth)
             a_nlen.append(part.name_len)
             names.append(part.names)
             dir_path.extend(part.dir_path)
@@ -411,6 +530,7 @@ class Store:
             size=cat(a_size, np.int64),
             mtime=cat(a_mt, np.int64),
             ctime=cat(a_ct, np.int64),
+            birth=cat(a_birth, bool),
             file_dir=np.repeat(np.arange(len(fcount), dtype=np.int32), fcount),
             names="".join(names),
             name_off=name_off,
@@ -456,6 +576,7 @@ class Store:
             size=self.size[f0:f1],
             mtime=self.mtime[f0:f1],
             ctime=self.ctime[f0:f1],
+            birth=self.birth[f0:f1],
             names=self.names[int(self.name_off[f0]) : int(self.name_off[f1])],
             name_len=np.diff(self.name_off[f0 : f1 + 1]),
             entry_errors=[(d - d0, n, m) for d, n, m in self.entry_errors if d0 <= d < d1],
@@ -506,12 +627,11 @@ class Store:
         with self._lazy_lock:
             if self._search is None:
                 low = self._lower_names()
-                lens = np.fromiter(map(len, low), dtype=np.int64, count=len(low))
-                starts = np.zeros(len(low), dtype=np.int64)
-                if len(low):
-                    np.cumsum(lens[:-1] + 1, out=starts[1:])
-                starts += 1
-                self._search = ("\x00" + "\x00".join(low) + "\x00", starts)
+                self._search = _joined(low)
+                dirs_low = [p.lower() for p in self.dir_path]
+                self._dir_low = dirs_low
+                # Nom de chaque dossier ; vide pour une racine, que la recherche ne retient jamais.
+                self._dir_search = _joined([p.rpartition("/")[2] for p in dirs_low])
                 order = sorted(range(len(low)), key=low.__getitem__)
                 rank = np.empty(len(low), dtype=np.int32)
                 rank[np.array(order, dtype=np.int64)] = np.arange(len(low), dtype=np.int32)
@@ -645,7 +765,7 @@ class Store:
         if f.max_size is not None:
             both(self.size[lo:hi] <= f.max_size)
         if f.q:
-            both(self.name_mask(f.q)[lo:hi])
+            both(self.name_mask(f.q, f.q_scope, f.q_mode)[lo:hi])
 
         dir_mask = None
         if f.access is not None:
@@ -663,24 +783,70 @@ class Store:
         idx = None if mask is None else (lo + np.flatnonzero(mask)).astype(np.int64)
         return self._sel_cache.put(f, Selection(lo, hi, idx, dlo, dhi, found, dir_mask))
 
-    def name_mask(self, q: str) -> np.ndarray:
-        """Masque des fichiers dont le nom contient ``q`` (ou correspond au glob ``q``)."""
-        q = q.replace("\x00", "").strip().lower()
-        cached = self._q_cache.get(q)
+    def name_mask(self, q: str, scope: str = "file", mode: str = "text") -> np.ndarray:
+        """Masque des fichiers retenus par la recherche ``q``, insensible à la casse.
+
+        ``scope`` : ``file`` compare le nom du fichier ; ``folder`` le nom de chacun de ses
+        dossiers parents (un dossier retenu apporte toute sa sous-arborescence) ; ``path`` son
+        chemin relatif à la racine. ``mode`` : ``text`` = sous-chaîne, ou glob si ``q`` contient
+        ``*`` ou ``?`` ; ``regex`` = expression régulière (SearchTimeout si trop lente).
+        """
+        q = normalize_query(q, mode)
+        key = (q, scope, mode)
+        cached = self._q_cache.get(key)
         if cached is not None:
             return cached
+        if mode != "regex" and not q.strip("*"):  # « * » seul : tout
+            return self._q_cache.put(key, np.ones(self.nfiles, dtype=bool))
         if self._search is None:
             self.warm_up()
-        assert self._search is not None
-        text, starts = self._search
-        if not q.strip("*"):  # « * » seul : tous les noms
-            return self._q_cache.put(q, np.ones(self.nfiles, dtype=bool))
-        rx = glob_to_regex(q) if ("*" in q or "?" in q) else re.escape(q)
-        positions = np.fromiter((m.start() for m in re.finditer(rx, text)), dtype=np.int64)
+        assert self._search is not None and self._dir_search is not None
+        rx = compile_query(q, mode)
+        deadline = time.monotonic() + REGEX_BUDGET_S if mode == "regex" else None
+        if scope == "folder":
+            dmask = _match_entries(*self._dir_search, rx, deadline)
+            dmask[self.dir_parent < 0] = False  # une racine retiendrait tout
+            mask = self._subtree_files(dmask)
+        elif scope == "path":
+            mask = self._path_mask(rx, deadline)
+        else:
+            mask = _match_entries(*self._search, rx, deadline)
+        return self._q_cache.put(key, mask)
+
+    def _subtree_files(self, dmask: np.ndarray) -> np.ndarray:
+        """Fichiers situés dans un dossier retenu ou dans l'un de ses sous-dossiers."""
+        ids = np.flatnonzero(dmask)
+        diff = np.zeros(self.ndirs + 1, dtype=np.int32)
+        np.add.at(diff, ids, 1)
+        np.add.at(diff, self.dir_end[ids], -1)
+        inside = np.cumsum(diff[:-1]) > 0
+        return inside[self.file_dir]
+
+    def _path_mask(self, rx: re.Pattern[str] | regex.Pattern[str], deadline: float | None) -> np.ndarray:
+        """Correspondance sur le chemin relatif « dossier/nom » de chaque fichier.
+
+        Les chemins ne sont pas gardés en mémoire : on les reconstitue dossier par dossier, en
+        préfixant les noms (déjà joints par NUL dans le texte de recherche) par le chemin du dossier.
+        """
+        assert self._search is not None and self._dir_low is not None
+        text, bounds = self._search
         mask = np.zeros(self.nfiles, dtype=bool)
-        if len(positions):
-            mask[np.searchsorted(starts, positions, side="right") - 1] = True
-        return self._q_cache.put(q, mask)
+        fstart = self.dir_fstart
+        for d in np.flatnonzero(np.diff(fstart)).tolist():  # dossiers contenant des fichiers
+            a, b = int(fstart[d]), int(fstart[d + 1])
+            names = text[bounds[a] : bounds[b] - 1]
+            prefix = f"{self._dir_low[d]}/" if self._dir_low[d] else ""
+            if deadline is not None:
+                entries = names.split("\x00")
+                hits = _regex_hits(rx, [prefix + e for e in entries] if prefix else entries, deadline)
+                mask[np.array(hits, dtype=np.int64) + a] = True
+                continue
+            chunk = "\x00" + prefix + names.replace("\x00", "\x00" + prefix) + "\x00"
+            if rx.search(chunk) is None:
+                continue
+            local = 1 + np.arange(b - a + 1, dtype=np.int64) * len(prefix) + (bounds[a : b + 1] - bounds[a])
+            mask[a:b] = _match_entries(chunk, local, rx, None)
+        return mask
 
     def sorted_rows(self, f: FileFilter, sort: str) -> np.ndarray:
         key = (f, sort)
@@ -728,4 +894,5 @@ class Store:
             "size": int(self.size[i]),
             "mtime": int(self.mtime[i]),
             "ctime": int(self.ctime[i]),
+            "ctime_birth": bool(self.birth[i]),
         }

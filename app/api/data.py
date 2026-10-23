@@ -98,7 +98,7 @@ def tree(request: Request, root: str = Query(...), path: str = Query(""), user: 
 def files(
     request: Request,
     f: FileFilter = Depends(file_filter),
-    sort: str = Query("path", description="name|path|ext|category|size|mtime|ctime, préfixe - pour décroissant"),
+    sort: str = Query("path", description="name|path|ext|category|size|mtime|ctime (création), préfixe - pour décroissant"),
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, le=1000),
     user: Principal = Depends(current_user),
@@ -144,6 +144,7 @@ def export_csv(
     rows = store.sorted_rows(f, sort)
     lang = lang_of(request)
     labels = CATEGORY_LABELS if lang == "fr" else CATEGORY_LABELS_EN
+    sources = (tr("csv_ctime_inode", lang), tr("csv_ctime_birth", lang))
 
     def generate() -> Iterator[str]:
         buf = io.StringIO()
@@ -155,7 +156,7 @@ def export_csv(
                 r = store.row_dict(i)
                 writer.writerow(
                     [r["root"], r["path"], r["name"], r["ext"], labels[r["category"]], r["size"],
-                     _fmt_ts(r["mtime"]), _fmt_ts(r["ctime"])]
+                     _fmt_ts(r["mtime"]), _fmt_ts(r["ctime"]), sources[r["ctime_birth"]]]
                 )
             yield buf.getvalue()
             buf.seek(0)

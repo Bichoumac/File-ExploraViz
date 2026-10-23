@@ -28,7 +28,8 @@ except AttributeError:  # pragma: no cover - dépend de la compilation de PyYAML
     SafeDumper = yaml.SafeDumper
 
 INDEX_FORMAT = "fev-index/1"
-INDEX_COLUMNS = ["name", "ext", "category", "size", "mtime", "ctime"]
+# btime (date de création réelle, null si inconnue) : 7e colonne, absente des index antérieurs.
+INDEX_COLUMNS = ["name", "ext", "category", "size", "mtime", "ctime", "btime"]
 
 # Caractères valides en JSON mais interdits ou transformés par YAML dans une chaîne entre
 # guillemets (contrôles C1, séparateurs de ligne Unicode, BOM, non-caractères).
@@ -136,7 +137,7 @@ class IndexWriter:
     def write_dir(
         self,
         rel: str,
-        files: list[tuple[str, str, str, int, int, int]],
+        files: list[tuple[str, str, str, int, int, int, int | None]],
         *,
         error: str | None = None,
         errors: list[tuple[str, str]] | None = None,
