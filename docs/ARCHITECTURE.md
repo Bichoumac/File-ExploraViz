@@ -33,6 +33,7 @@ Deviations from the original specification are listed at the end (§ 6).
 | `pathsec.py` | Relative path normalisation, confinement to the roots (path traversal, symbolic links). |
 | `yamlio.py` | Atomic writes, `CSafeLoader`/`CSafeDumper`, **streaming** index writer and reader. |
 | `scanner.py` | Iterative `os.scandir` walk of a root → `index_<root>.yaml` (streamed). |
+| `fsstat.py` | Per-file `stat` with the real creation date: `statx(2)` through `ctypes` on Linux, `st_birthtime` elsewhere. |
 | `store.py` | In-memory index (numpy), filters, sorting, pagination, name search, LRU caches. |
 | `aggregates.py` | Statistics (categories, extensions, years, histogram, top N, duplicates…) and treemap tree. |
 | `scan_manager.py` | "One scan at a time" lock, low-priority thread, progress, cancellation, summary/history writing, Store swap. |
@@ -48,8 +49,10 @@ Deviations from the original specification are listed at the end (§ 6).
 ### 3.1 `index_<root>.yaml` — detailed index, multi-document, streamed
 
 A header document, then **one document per folder** (pre-order DFS, children sorted), then a footer
-document. Each file is a flow sequence `[name, extension, category, size, mtime, ctime]` (dates in
-epoch seconds).
+document. Each file is a flow sequence `[name, extension, category, size, mtime, ctime, btime]`
+(dates in epoch seconds). `ctime` is the last inode change (`st_ctime`); `btime` is the real
+creation date, or `null` when the file system does not report it. Indexes written before `btime`
+existed have 6 columns and are still read (no birth time).
 
 ```yaml
 # File ExploraViz - index détaillé (généré automatiquement, ne pas modifier)
@@ -59,11 +62,12 @@ root_id: photos
 root_name: Photos
 root_path: /data/photos
 started_at: '2026-10-22T10:00:00+02:00'
-columns: [name, ext, category, size, mtime, ctime]
+columns: [name, ext, category, size, mtime, ctime, btime]
 ---
 dir: ""
 files:
-- ["IMG_0001.jpg", "jpg", "photo", 2345678, 1690000000, 1690000000]
+- ["IMG_0001.jpg", "jpg", "photo", 2345678, 1690000000, 1690000000, 1689990000]
+- ["notes.txt", "txt", "document", 120, 1690000000, 1690000000, null]
 ---
 dir: "2023/holidays"
 errors:
@@ -74,7 +78,7 @@ dir: "2023/private"
 error: "[Errno 13] Permission denied"
 files: []
 ---
-footer: {"finished_at": "2026-10-22T10:03:12+02:00", "status": "ok", "files": 1, "dirs": 3, "bytes": 2345678, "inaccessible": 2, "symlinks_skipped": 0, "duration_s": 192.4}
+footer: {"finished_at": "2026-10-22T10:03:12+02:00", "status": "ok", "files": 2, "dirs": 3, "bytes": 2345798, "inaccessible": 2, "symlinks_skipped": 0, "birth_times": 1, "duration_s": 192.4}
 ```
 
 * Relative path of a file = `dir` + `/` + `name`.
@@ -145,9 +149,21 @@ auth:
 * Folders are numbered in **pre-order**: the subtree of folder `d` is the range `[d, end[d])`, and
   since files are grouped by folder, its files are a contiguous range too. The "folder + sub-folders"
   filter is therefore a slice, not a walk.
-* numpy columns: `size`, `mtime`, `ctime` (int64), `ext_id` (int32), `cat` (uint8), `dir` (int32).
+* numpy columns: `size`, `mtime`, `ctime` (int64), `birth` (bool), `ext_id` (int32), `cat` (uint8),
+  `dir` (int32). `ctime` holds the **creation date**: `btime` when known (`birth` true), otherwise
+  `st_ctime`.
 * Names: one big string plus an offset array (≈ 25 bytes/file instead of ~70 for Python `str`).
-  Search runs a regular expression over a lower-cased copy built on first use.
+* Search (`Store.name_mask`, cached per query, scope and mode): lower-cased search texts are built
+  once — file names and folder names, each joined with NUL separators, plus folder paths.
+  * **Substring and wildcards** are translated to a regular expression that cannot cross a NUL and
+    run in **one pass** over the whole text; match positions are mapped back to entries with
+    `searchsorted`.
+  * **Folder scope** matches folder names, then marks each matching folder's subtree with a
+    difference array (`+1` at `d`, `-1` at `end[d]`, cumulative sum) and maps it to files.
+  * **Path scope** rebuilds `folder/name` texts folder by folder (prefix + names already joined),
+    so no full-path index is kept in memory.
+  * **Regular expressions** (user syntax, which could cross separators) are tested one entry at a
+    time with the `regex` module, under a 10 s total budget (`REGEX_BUDGET_S`), releasing the GIL.
 * Per-folder aggregates (size, count, size per category, max mtime) computed with cumulative sums,
   on demand then cached, for the treemap.
 * LRU caches: selection per filter, sort per (filter, sort), statistics per filter; invalidated with
@@ -174,7 +190,7 @@ Routes marked **admin** answer 403 to viewers; data routes are restricted to a v
 | POST | `/api/users/{username}/password` | **admin** — reset a viewer's password. |
 | GET | `/api/roots` | Configured and detected roots, with totals. |
 | GET | `/api/tree?root=&path=` | Direct sub-folders (collapsible tree). |
-| GET | `/api/files?root=&path=&recursive=&ext=&category=&from=&to=&date_field=&min_size=&max_size=&q=&sort=&page=&page_size=` | Paginated list. |
+| GET | `/api/files?root=&path=&recursive=&ext=&category=&from=&to=&date_field=&min_size=&max_size=&q=&q_scope=&q_mode=&sort=&page=&page_size=` | Paginated list. |
 | GET | `/api/files/export.csv?…` | CSV export (same filters). |
 | GET | `/api/extensions?root=&prefix=` | Extension autocompletion. |
 | GET | `/api/stats?…` | Statistics (same filters). |
@@ -188,8 +204,15 @@ Routes marked **admin** answer 403 to viewers; data routes are restricted to a v
 | POST | `/api/cache/clear` | **admin** — clears the cache, then starts a scan. |
 
 Common parameters: `ext` and `category` are comma-separated lists; `from`/`to` use `YYYY-MM-DD`;
-`sort` is `name|path|ext|category|size|mtime|ctime`, prefixed with `-` for descending order; `q` is
-a substring, or a glob when it contains `*` or `?`.
+`sort` is `name|path|ext|category|size|mtime|ctime`, prefixed with `-` for descending order;
+`ctime` (also in `date_field`) is the **creation date** — the real one when the file system reports
+it, otherwise the last inode change; each row says which with `ctime_birth` (`true` = real).
+`q` is a substring, or a glob when it contains `*` or `?` (`*`, `?`, `[abc]`, `[a-z]`, `[!abc]`);
+`q_mode=regex` makes it a regular expression (`regex` module syntax). `q_scope` chooses what it is
+compared with: `file` (file name, default), `folder` (name of any parent folder; a match brings in
+the folder's whole subtree, roots excluded) or `path` (path relative to the root). Always
+case-insensitive. An invalid pattern answers 400 `bad_pattern`; a regular expression still running
+after 10 s answers 400 `regex_timeout`.
 
 API messages are returned in English or French depending on the `fev_lang` cookie set by the UI
 (English by default); errors are `{"detail": "…", "code": "stable_key"}` (see `app/i18n.py`).
@@ -209,8 +232,8 @@ API messages are returned in English or French depending on the `fev_lang` cooki
 6. **First scan at startup** when nothing is cached.
 7. **`ADMIN_USER`/`ADMIN_PASSWORD`** only **initialise** the account: a password changed in the UI
    is not overwritten on restart. Likewise `SCAN_INTERVAL_MINUTES` is only an initial value.
-8. **"Creation date"**: on Linux, Python exposes `st_ctime`, which is the last inode change, not the
-   real birth time of the file.
+8. **"Creation date"**: the real birth time read with `statx(2)` when the file system reports it;
+   otherwise `st_ctime`, the last inode change, flagged as such (`ctime_birth: false`).
 9. **Duplicates**: grouped by (case-insensitive name, size), non-empty files only.
 10. Extra routes: `/api/auth/state`, `/api/auth/setup`, `/api/auth/password`, `/api/extensions`,
     `/api/cache/clear`.

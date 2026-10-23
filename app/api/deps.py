@@ -14,7 +14,7 @@ from ..pathsec import PathError, normalize_rel
 from ..scan_manager import AppState, ScanManager
 from ..scheduler import Scheduler
 from ..settings import Settings
-from ..store import FileFilter, Store
+from ..store import Q_MODES, Q_SCOPES, FileFilter, QueryError, Store, compile_query, normalize_query
 from ..timeutil import day_end, day_start
 
 
@@ -133,13 +133,21 @@ def file_filter(
     date_field: str = Query("mtime", pattern="^(mtime|ctime)$", description="mtime (modification) ou ctime"),
     min_size: int | None = Query(None, ge=0, description="Taille minimale en octets"),
     max_size: int | None = Query(None, ge=0, description="Taille maximale en octets"),
-    q: str = Query("", max_length=256, description="Sous-chaîne du nom, ou glob avec * et ?"),
+    q: str = Query("", max_length=256, description="Recherche : sous-chaîne, glob (* ? [...]) ou regex selon q_mode"),
+    q_scope: str = Query("file", pattern=f"^({'|'.join(Q_SCOPES)})$", description="file : nom du fichier ; folder : nom d'un dossier parent ; path : chemin relatif"),
+    q_mode: str = Query("text", pattern=f"^({'|'.join(Q_MODES)})$", description="text : sous-chaîne ou glob ; regex : expression régulière"),
 ) -> FileFilter:
     try:
         rel = normalize_rel(path)
     except PathError as exc:
         raise ApiError(400, "path_refused") from exc
     d_from, d_to = _date(from_, "from"), _date(to, "to")
+    q = q if q_mode == "regex" else q.strip()
+    if q:
+        try:
+            compile_query(normalize_query(q, q_mode), q_mode)
+        except QueryError as exc:
+            raise ApiError(400, "bad_pattern", detail=str(exc)) from exc
     return FileFilter(
         root=root or None,
         path=rel if root else "",
@@ -151,5 +159,7 @@ def file_filter(
         date_to=day_end(d_to) if d_to else None,
         min_size=min_size,
         max_size=max_size,
-        q=q.strip(),
+        q=q,
+        q_scope=q_scope,
+        q_mode=q_mode,
     )

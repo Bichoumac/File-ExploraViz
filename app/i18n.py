@@ -39,6 +39,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "fr": "Chemin refusé (hors de la racine, « .. » ou caractère interdit).",
     },
     "dir_not_found": {"en": "Folder not found in the index.", "fr": "Dossier introuvable dans l'index."},
+    "bad_pattern": {"en": "Invalid search pattern: {detail}", "fr": "Motif de recherche invalide : {detail}"},
+    "regex_timeout": {
+        "en": "The regular expression takes too long: make it simpler or more specific.",
+        "fr": "L'expression régulière est trop longue à évaluer : simplifiez-la ou précisez-la.",
+    },
     # --- scan
     "scan_started": {"en": "Scan started.", "fr": "Scan lancé."},
     "scan_already_running": {
@@ -119,9 +124,13 @@ MESSAGES: dict[str, dict[str, str]] = {
     "v_id_chars": {"en": "allowed characters: letters, digits, . _ -", "fr": "caractères autorisés : lettres, chiffres, . _ -"},
     # --- export CSV
     "csv_header": {
-        "en": "root;path;name;extension;category;size_bytes;modified;created",
-        "fr": "racine;chemin;nom;extension;catégorie;taille_octets;modification;création",
+        "en": "root;path;name;extension;category;size_bytes;modified;created;created_source",
+        "fr": "racine;chemin;nom;extension;catégorie;taille_octets;modification;création;source_création",
     },
+    # « created » vaut la vraie date de création si le système de fichiers la fournit,
+    # sinon le dernier changement d'inode (st_ctime).
+    "csv_ctime_birth": {"en": "birth time", "fr": "création réelle"},
+    "csv_ctime_inode": {"en": "inode change", "fr": "changement d'inode"},
 }
 
 

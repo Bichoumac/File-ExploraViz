@@ -262,6 +262,17 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .filters .row { display: flex; gap: 6px; align-items: center; }
 .filters input[type="date"] { width: 145px; }
 .filters input.size { width: 90px; }
+.qbox { display: flex; min-width: 0; }
+.qbox select { max-width: 42%; border-radius: 8px 0 0 8px; border-right: 0; background: var(--surface-2); color: var(--text-2); }
+.qbox input { flex: 1; min-width: 0; border-radius: 0; }
+.qbox input.invalid { border-color: var(--danger); outline-color: var(--danger); }
+.qre {
+  min-width: 40px; padding: 0 8px; border: 1px solid var(--border); border-left: 0; border-radius: 0 8px 8px 0;
+  background: var(--surface); color: var(--text-2); cursor: pointer;
+  font: 600 13px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.qre:hover { background: var(--surface-2); color: var(--text); }
+.qre[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 34px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); position: relative; min-width: 200px; }
 .tags input { border: 0; min-height: 26px; padding: 2px 4px; flex: 1; min-width: 70px; background: transparent; }
 .tags input:focus { outline: none; }
@@ -448,6 +459,11 @@ details.more summary { cursor: pointer; color: var(--accent); font-size: 12px; m
   .filters { padding: 10px 12px; }
   .filters-top { display: flex; gap: 8px; align-items: flex-end; width: 100%; }
   .filters-top .field { flex: 1; min-width: 0; }
+  /* Recherche : portée au-dessus, saisie et bouton regex en dessous (sinon tout est tronqué). */
+  .qbox { flex-wrap: wrap; }
+  .qbox select { flex: 1 0 100%; max-width: none; border-right: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .qbox input { border-radius: 0 0 0 8px; }
+  .qre { border-radius: 0 0 8px 0; }
   .filters-toggle { display: inline-flex; }
   .filters.open .filters-toggle { background: var(--surface-3); border-color: var(--text-2); }
   .filters-more { display: none; }

@@ -13,6 +13,8 @@ DYNAMIC = {
     "unit.": ["B", "K", "M", "G", "T", "P"],
     "ex.sort.": ["path", "name", "-name", "-size", "size", "-mtime", "mtime", "ext", "category"],
     "ex.preset.": ["all", "7d", "30d", "year", "gt1y", "gt5y", "custom"],
+    "ex.qScope.": ["file", "folder", "path"],
+    "ex.searchPh.": ["file", "folder", "path"],
     "scan.status.": ["idle", "running", "cancelling", "done", "cancelled", "error"],
     "st.age.": [str(i) for i in range(7)],
     "usr.role.": ["admin", "viewer"],

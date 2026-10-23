@@ -96,7 +96,7 @@ function filterChips() {
   if (f.ext) chips.push(t('st.chip.exts', { list: f.ext }));
   if (f.from || f.to) chips.push(t(f.date_field === 'ctime' ? 'st.chip.created' : 'st.chip.modified', { from: f.from || '…', to: f.to || '…' }));
   if (f.min_size || f.max_size) chips.push(t('st.chip.size', { min: f.min_size ? fmtBytes(+f.min_size) : '0', max: f.max_size ? fmtBytes(+f.max_size) : '∞' }));
-  if (f.q) chips.push(t('st.chip.name', { q: f.q }));
+  if (f.q) chips.push(t(f.q_mode === 'regex' ? 'st.chip.qRegex' : 'st.chip.q', { scope: t(`ex.qScope.${f.q_scope || 'file'}`), q: f.q }));
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
 
@@ -132,6 +132,7 @@ function render() {
       ${tile(t('st.t.oldest'), fmtDate(tot.oldest_mtime), t('st.t.newest', { d: fmtDate(tot.newest_mtime) }))}
       ${tot.future_mtime ? tile(t('st.t.future'), fmtInt(tot.future_mtime), t('st.t.futureSub')) : ''}
       ${tile(t('st.t.depth'), fmtInt(tot.max_depth), t('st.t.depthSub'))}
+      ${tot.birth_times != null && tot.files ? tile(t('st.t.birth'), pct(tot.birth_times, tot.files), t('st.t.birthSub')) : ''}
     </div>
     <div class="sgrid">
       <div class="card"><div class="card-h"><h2>${t('st.c.cats')}</h2>${seg('cats', t('st.volume'), t('st.count'))}</div><div class="card-b"><div class="chart" id="c-cats"></div></div></div>

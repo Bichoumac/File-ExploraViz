@@ -83,6 +83,8 @@ def compute_stats(store: Store, sel: Selection, *, now: float | None = None, det
             "oldest_mtime": int(mt.min()) if n else None,
             "newest_mtime": int(mt.max()) if n else None,
             "future_mtime": int((mt > now + DAY).sum()),
+            # Fichiers dont la « date de création » est la vraie (btime), et non st_ctime.
+            "birth_times": int(sel.take(store.birth).sum()) if n else 0,
             "extensions": int(len(np.unique(exts))) if n else 0,
             "max_depth": int(store.dir_depth[scope_ids].max(initial=0) - store.dir_depth[sel.dir_lo])
             if scope_dirs

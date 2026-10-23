@@ -114,7 +114,13 @@ export async function api(path, { method = 'GET', body, params, signal } = {}) {
   }
   const res = await fetch(path + qs(params), opts);
   let data = null;
-  try { data = await res.json(); } catch { /* corps vide */ }
+  try {
+    data = await res.json();
+  } catch (ex) {
+    // Requête remplacée pendant la lecture du corps : l'appelant ignore AbortError, ne pas renvoyer null.
+    if (ex.name === 'AbortError') throw ex;
+    /* corps vide */
+  }
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new CustomEvent('auth-required'));
     const detail = data && (typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join(' ; ') : null);
@@ -153,7 +159,7 @@ export function replaceParams(params) {
 }
 
 /** Paramètres de filtre communs Explorateur / Statistiques. */
-export const FILTER_KEYS = ['root', 'path', 'recursive', 'ext', 'category', 'from', 'to', 'date_field', 'min_size', 'max_size', 'q'];
+export const FILTER_KEYS = ['root', 'path', 'recursive', 'ext', 'category', 'from', 'to', 'date_field', 'min_size', 'max_size', 'q', 'q_scope', 'q_mode'];
 export function pickFilters(params) {
   const out = {};
   for (const k of FILTER_KEYS) if (params[k] !== undefined && params[k] !== '') out[k] = params[k];

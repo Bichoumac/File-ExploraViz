@@ -15,6 +15,7 @@ const COLS = [
 ];
 const SORTS = ['path', 'name', '-name', '-size', 'size', '-mtime', 'mtime', 'ext', 'category'].map((v) => [v, t(`ex.sort.${v}`)]);
 const PRESETS = ['', '7d', '30d', 'year', 'gt1y', 'gt5y', 'custom'].map((v) => [v, t(`ex.preset.${v || 'all'}`)]);
+const Q_SCOPES = ['file', 'folder', 'path'].map((v) => [v, t(`ex.qScope.${v}`)]);
 
 let el; let app; let P = {}; let roots = [];
 const treeCache = new Map(); // "racine:chemin" -> sous-dossiers
@@ -143,8 +144,12 @@ function layout() {
       <div class="band card" id="band"><div class="empty">${t('common.loading')}</div></div>
       <div class="filters card" id="filters">
         <div class="filters-top">
-          <label class="field grow">${t('ex.search')}
-            <input id="f-q" type="search" placeholder="${t('ex.searchPh')}" autocomplete="off"></label>
+          <div class="field grow"><span id="f-q-lbl">${t('ex.search')}</span>
+            <div class="qbox" title="${t('ex.searchHelp')}">
+              <select id="f-qs" aria-label="${t('ex.qScope')}">${Q_SCOPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+              <input id="f-q" type="search" aria-labelledby="f-q-lbl" autocomplete="off" spellcheck="false">
+              <button class="qre" type="button" id="f-qre" aria-pressed="false" aria-label="${t('ex.regex')}" title="${t('ex.regexTitle')}">.*</button>
+            </div></div>
           <button class="btn filters-toggle" type="button" id="f-toggle" aria-expanded="false" aria-controls="filters-more">
             ${icon('filter')}<span>${t('ex.filters')}</span><span class="badge" id="f-count" hidden></span></button>
         </div>
@@ -152,7 +157,7 @@ function layout() {
         <label class="field">${t('ex.period')}<select id="f-preset">${PRESETS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
         <label class="field">${t('ex.from')}<input id="f-from" type="date"></label>
         <label class="field">${t('ex.to')}<input id="f-to" type="date"></label>
-        <label class="field">${t('ex.dateField')}<select id="f-df"><option value="mtime">${t('ex.mtime')}</option><option value="ctime">${t('ex.ctime')}</option></select></label>
+        <label class="field" title="${t('ex.ctimeHelp')}">${t('ex.dateField')}<select id="f-df"><option value="mtime">${t('ex.mtime')}</option><option value="ctime">${t('ex.ctime')}</option></select></label>
         <div class="field"><span>${t('ex.exts')}</span><div class="tags" id="f-ext"><input placeholder="jpg, pdf…" aria-label="${t('ex.addExt')}" autocomplete="off"><div class="suggest hidden"></div></div></div>
         <label class="field">${t('ex.minSize')}<span class="row"><input id="f-min" class="size" type="number" min="0" step="any" placeholder="—">${units('f-minu')}</span></label>
         <label class="field">${t('ex.maxSize')}<span class="row"><input id="f-max" class="size" type="number" min="0" step="any" placeholder="—">${units('f-maxu')}</span></label>
@@ -186,7 +191,10 @@ function bind() {
   $('#vp').classList.toggle('flow', isMobile());
   $('#f-root').addEventListener('change', (e) => setParams({ root: e.target.value, path: '' }, { push: true }));
   $('#f-rec').addEventListener('change', (e) => setParams({ recursive: e.target.checked ? '1' : '0' }));
-  $('#f-q').addEventListener('input', debounce((e) => setParams({ q: e.target.value.trim() }), 300));
+  // En mode regex, les espaces de bord font partie du motif : pas de trim.
+  $('#f-q').addEventListener('input', debounce((e) => setParams({ q: P.q_mode === 'regex' ? e.target.value : e.target.value.trim() }), 300));
+  $('#f-qs').addEventListener('change', (e) => setParams({ q_scope: e.target.value === 'file' ? '' : e.target.value }));
+  $('#f-qre').addEventListener('click', () => setParams({ q_mode: P.q_mode === 'regex' ? '' : 'regex' }));
   $('#f-preset').addEventListener('change', (e) => {
     const v = e.target.value;
     if (v === 'custom') setParams({ preset: 'custom' });
@@ -253,6 +261,10 @@ function syncControls() {
   rec.checked = P.recursive !== '0';
   rec.disabled = !P.root;
   if (document.activeElement !== $('#f-q')) $('#f-q').value = P.q || '';
+  const regex = P.q_mode === 'regex';
+  $('#f-qs').value = P.q_scope || 'file';
+  $('#f-qre').setAttribute('aria-pressed', String(regex));
+  $('#f-q').placeholder = regex ? t('ex.searchPh.regex') : t(`ex.searchPh.${P.q_scope || 'file'}`);
   $('#f-preset').value = P.preset || (P.from || P.to ? 'custom' : '');
   $('#f-from').value = P.from || '';
   $('#f-to').value = P.to || '';
@@ -462,12 +474,14 @@ async function loadFiles() {
     });
   } catch (ex) {
     if (ex.name === 'AbortError') return;
+    el.querySelector('#f-q').classList.toggle('invalid', ['bad_pattern', 'regex_timeout'].includes(ex.data?.code));
     rows = []; total = 0; pages = 1;
     inner.style.height = 'auto';
     inner.innerHTML = `<div class="empty">${esc(ex.message)}</div>`;
     renderPager();
     return;
   }
+  el.querySelector('#f-q').classList.remove('invalid');
   rows = r.rows; total = r.total; pages = r.pages; pageSize = r.page_size;
   P.page = String(r.page);
   const vp = el.querySelector('#vp');
@@ -528,7 +542,7 @@ function renderRows() {
       <div>${f.ext ? esc(f.ext) : '<span class="muted">—</span>'}</div>
       <div title="${esc(c.label)}"><span class="caticon" style="background:${catColor(f.category)}">${icon(c.icon)}</span></div>
       <div class="r num" title="${t('ex.bytes', { n: fmtInt(f.size), count: f.size })}">${fmtBytes(f.size)}</div>
-      <div class="r num" title="${t('ex.created', { date: fmtDate(f.ctime) })}">${fmtDate(f.mtime)}</div>
+      <div class="r num" title="${t(f.ctime_birth ? 'ex.created' : 'ex.changed', { date: fmtDate(f.ctime) })}">${fmtDate(f.mtime)}</div>
     </div>`;
   }
   inner.innerHTML = html;

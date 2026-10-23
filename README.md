@@ -55,21 +55,47 @@ and a **WinDirStat-style treemap**. It is built for a NAS: the scan runs at low 
 * **No scan on page load**: the UI reads the latest result, loaded into memory once.
 
 **Explorer**: summary banner (files, folders, volume, clickable per-category breakdown),
-collapsible folder tree, breadcrumb, combinable filters (modification or creation date with
-shortcuts, extensions with autocompletion, categories, size range, substring or glob name search),
+collapsible folder tree, breadcrumb, combinable filters (modification or real creation date with
+shortcuts, extensions with autocompletion, categories, size range, search by **file name, folder
+name or full path** with a substring, wildcards or a regular expression — see [Search](#search)),
 filters stored in the URL (shareable links), sortable columns, server-side pagination, virtualised
 table, CSV export.
+
+**Real creation dates**: on Linux the scanner reads each file's birth time with `statx(2)`, at no
+extra cost (it replaces the usual `stat`). When a file system does not report it, the last inode
+change (`st_ctime`) is used instead, and the interface says so: the date tooltip reads "Inode
+changed" instead of "Created", the CSV has a `created_source` column, and **Statistics** shows the
+share of files with a real creation date.
 
 **Statistics**: donut per category (volume/count), top 20 extensions, size histogram (log buckets),
 modification years, file age, top 50 files and top 20 folders, most populated folders, probable
 duplicates (same name + same size) with reclaimable space, empty files and folders, inaccessible
-items, hidden files, suspicious dates, evolution over time. Every statistic follows the Explorer
-filters.
+items, hidden files, suspicious dates, share of real creation dates, evolution over time. Every
+statistic follows the Explorer filters.
 
 **Treemap**: *squarified* layout, Canvas rendering, WinDirStat-like *cushion* shading (optional),
 colour per category, clickable legend to hide a category, tiny items grouped together, tooltip
 (path, size, % of parent, date), click to zoom, double-click to open the folder in the Explorer,
 side panel of sub-folders synchronised with the map.
+
+<a id="search"></a>**Search**: the selector in front of the search box chooses what is compared.
+
+| Search in | Compares | Example |
+|---|---|---|
+| **File name** (default) | the file's own name | `*.jpg`, `IMG_20??*` |
+| **Folder name** | the name of every folder above the file: a matching folder brings in **all its files, sub-folders included**; root folders never match | `2023`, `*holiday*` |
+| **Full path** | the path relative to the root, `folder/sub-folder/name` | `2023/holidays`, `2023/*.jpg` |
+
+* **Text** (default): a substring, or **wildcards** as soon as the text contains `*` or `?`:
+  `*` any characters (in a full path it also crosses `/`), `?` exactly one character, `[abc]`,
+  `[a-z]` or `[!abc]` one character of a set. Without `*` or `?`, brackets stay literal, so
+  `Movie [2019]` finds that name.
+* **Regular expression**: click the **`.*`** button next to the box, e.g. `^IMG_\d{4}\.jpe?g$`
+  or, in full path mode, `^20(19|2[0-3])/`. Python syntax
+  ([`regex`](https://pypi.org/project/regex/) module). An invalid expression is reported at once;
+  one that takes longer than 10 s to evaluate is stopped.
+* Always case-insensitive, and combined with every other filter, the selected folder and, for
+  viewers, their allowed folders. The choice is stored in the URL (`q_scope`, `q_mode`).
 
 **Languages**: English by default; the **FR/EN** button in the top bar switches to French. The
 choice is remembered by the browser and sent to the server in a cookie, so API messages (errors,
@@ -268,7 +294,7 @@ sudo chown -R {{ PUID - Step 1 }}:{{ GUID - Step 1 }} /mnt/tank/apps/file-explor
    ```
    msg="exécution en tant que {{ PUID - Step 1 }}:{{ GUID - Step 1 }}"
    msg="nouvelle racine détectée" root=photos folder=photos
-   msg="File ExploraViz démarré" version=1.1.0 port=8080
+   msg="File ExploraViz démarré" version=1.2.0 port=8080
    ```
    then, about ten seconds later, `msg="scan terminé"` (the first scan starts by itself; log
    messages are in French).
@@ -325,7 +351,7 @@ Otherwise copy the folder: `sudo cp -a /mnt/tank/apps/file-exploraviz/config /mn
 **3. Update.**
 * With `FEV_TAG=latest`: open the stack in Dockge and click **Update**.
 * To move to a given version: click **Edit**, set `FEV_TAG` to the new version in the `.env`
-  editor (e.g. `FEV_TAG=1.1.0`), click **Save**, then **Update**.
+  editor (e.g. `FEV_TAG=1.2.0`), click **Save**, then **Update**.
 
 **Update** downloads the image (`docker compose pull`), then recreates the container with it
 (`docker compose up -d`). The interface is unavailable for a few seconds, plus the time needed to
@@ -557,6 +583,21 @@ Rule of thumb: 60 MB + **about 260 bytes per indexed file**.
 Every request stays under the 200 ms target from the first call. The first call of a filter
 includes computing it; the result is then cached until the next scan.
 
+**Search modes** (same script and 1 M-file index, measured on 23/10/2026 on another workstation:
+Windows 11, Python 3.13, where the file-name substring and glob searches above take 20 and 27 ms):
+
+| Search | First call | Next calls (median) |
+|---|---:|---:|
+| Folder name: substring / wildcards / regular expression | 12 / 21 / 74 ms | 5 ms |
+| Full path, wildcards | 690 ms | 6 ms |
+| File name, regular expression | 1.5 s | 6 ms |
+| Full path, regular expression | 2.3 s | 6 ms |
+
+Folder-name searches stay well under the target. Full-path searches rebuild the paths folder by
+folder instead of keeping them in RAM, and regular expressions are tested one name at a time under
+a time limit (see [Design decisions](#design-decisions)): their **first** call is slower, then
+cached. Storing the creation date adds about 6 % to the index loading time.
+
 **Scan** (200,000 files in 1,939 folders, files already in the OS cache): **2.0 s, about 100,000
 files/s**, 15 MB index. On a ZFS pool of spinning disks whose metadata is not in ARC, expect a few
 thousand files per second on the first scan: the per-file `stat()` dominates. Later scans benefit
@@ -615,7 +656,7 @@ named) or a non-writable `/config` (host folder permissions).
 ```sh
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
-pytest                                           # 96 tests (scanner, filters, aggregates, security, YAML, auth, accounts & permissions, API, i18n)
+pytest                                           # 118 tests (scanner, creation dates, filters, search, aggregates, security, YAML, auth, accounts & permissions, API, i18n)
 
 # Run locally on a test folder
 python scripts/gen_tree.py ./data/demo --files 5000
@@ -640,7 +681,7 @@ builds the amd64 + arm64 image. Every push to `main` publishes `:edge`; pushing 
 publishes `:X.Y.Z`, `:X.Y`, `:X` and `:latest`:
 
 ```sh
-git tag v1.1.0 && git push origin v1.1.0
+git tag v1.2.0 && git push origin v1.2.0
 ```
 
 Layout: `app/` (backend: `scanner`, `yamlio`, `store`, `aggregates`, `scan_manager`, `scheduler`,
@@ -665,7 +706,10 @@ in French.
 * **Sizes are apparent sizes** (`st_size`), not space used on disk: ZFS compression,
   deduplication, sparse files and snapshots are not reflected. A hard-linked file is counted once
   for each of its paths.
-* **"Creation date" is `st_ctime` on Linux** (last inode change), not the real birth time.
+* **Creation dates need file system support.** `statx(2)` reports the birth time on ext4, XFS,
+  Btrfs, recent OpenZFS (2.2+) and SMB/CIFS mounts, among others. Elsewhere (some NFS or FUSE
+  mounts, older kernels or ZFS versions), the last inode change is used instead and flagged as
+  such. Indexes written by earlier versions have no birth time until the next scan.
 * **Every scan is a full scan**; there is no incremental mode yet.
 * **Duplicates are a heuristic** (same case-insensitive name + same size): false positives
   (different content) and false negatives (renamed copies) are possible.
@@ -684,9 +728,9 @@ in French.
 **Interface**
 * The UI and API messages exist in **English and French only**; log messages and source comments
   are in French. Native date pickers follow the browser's language, not the app's.
-* Name search applies to **file names only** (see [Roadmap](#roadmap), priority 1); it is
-  case-insensitive but **not accent-insensitive** (`ete` does not match `été`), and
-  globs only support `*` and `?` (no `[...]` classes).
+* Search is case-insensitive but **not accent-insensitive** (`ete` does not match `été`).
+* A **regular expression** is tested on each name or path in turn: the first query takes about
+  1.5 s per million files (then it is cached until the next scan), and evaluation stops after 10 s.
 * Sorting by name uses code-point order of the lower-cased name, not a locale-aware order.
 * CSV uses `;` as separator (French Excel default).
 * Requires a recent browser (ES modules, CSS `:has()`, Canvas `roundRect`): Chrome/Edge 105+,
@@ -706,33 +750,10 @@ in French.
 
 Ideas for future work, roughly by value for effort. Each item says *why* and gives a *how to*
 starting point. (Done since the first version: published multi-arch image, CI, English/French UI,
-accounts with folder permissions.)
+accounts with folder permissions, real creation dates, search by folder name or full path with
+wildcards and regular expressions.)
 
-### Priority
-
-1. **Choose what the name filters apply to: file name or folder name**
-   *Why:* today the search box and the glob only look at **file names**. Being able to search for
-   folders (e.g. every file under any folder called `2023` or `*vacances*`) is often the quickest
-   way to narrow down a large share.
-   *How to:*
-   * **API**: add `q_scope=file|folder|path` to every filtered route (`file_filter()` in
-     `app/api/deps.py`, new field in `FileFilter`). `file` keeps today's behaviour; `folder` matches
-     folder names; `path` matches the whole relative path.
-   * **Store** (`app/store.py`): in `warm_up()`, build a second search text from the lower-cased
-     folder names, exactly like the file-name one (`"\x00".join(...)` + start offsets), and reuse
-     `glob_to_regex()`. A query gives the matching folder ids; mark their **whole subtree** with a
-     difference array (`+1` at `d`, `-1` at `dir_end[d]`, then `cumsum`), and turn that per-folder
-     mask into a per-file mask with `mask_dirs[file_dir]`. Everything stays vectorised and cached in
-     `_q_cache` with the scope in the key.
-   * **UI** (`web/assets/explorer.js`): a small *File name / Folder name / Full path* selector next
-     to the search box, stored in the URL like the other filters; add the labels to
-     `web/assets/i18n.js` in both languages.
-   * **Tests**: folder match includes sub-folders, glob on folder names, combination with the other
-     filters, `path` scope.
-
-### Later
-
-2. **Incremental scans**
+1. **Incremental scans**
    *Why:* full rescans of millions of files are slow on spinning disks.
    *How to:* store each folder's `mtime` in its index document (`app/scanner.py`,
    `IndexWriter.write_dir`). On the next scan, when a folder's `mtime` is unchanged, reuse its file
@@ -740,55 +761,49 @@ accounts with folder permissions.)
    changes when entries are added, removed or renamed, not when a file's content or size changes,
    so keep a periodic full scan (e.g. nightly) as an option in `ScanConfig`.
 
-3. **Faster startup with a binary cache**
+2. **Faster startup with a binary cache**
    *Why:* 5 s per million files to rebuild the index from YAML.
    *How to:* after building a `Store`, save its numpy columns with `numpy.savez` next to the YAML
    (e.g. `/cache/store_<root>.npz`, plus names and folder paths) with a format version and the YAML
    `footer` timestamp. At startup, load the `.npz` when it matches the YAML; otherwise fall back to
    `load_root_part`. YAML stays the source of truth.
 
-4. **Disk usage vs apparent size**
+3. **Disk usage vs apparent size**
    *Why:* on ZFS with compression, apparent sizes overstate real usage.
    *How to:* also record `st_blocks * 512` in the scanner (one more column in the index row and in
    `RootPart`/`Store`), then add a "size on disk" toggle in the Explorer, Statistics and Treemap.
 
-5. **Real creation dates**
-   *Why:* `st_ctime` is not the birth time on Linux.
-   *How to:* call the `statx(2)` syscall through `ctypes` with `STATX_BTIME` in `scanner.py`
-   (fall back to `st_ctime` when the filesystem does not report it), and label the column
-   accordingly.
-
-6. **Content-based duplicate confirmation**
+4. **Content-based duplicate confirmation**
    *Why:* the name + size heuristic produces false positives.
    *How to:* an optional, low-priority job that, for each candidate group from
    `aggregates._duplicates`, hashes the first and last 64 KB, then the full file (BLAKE2) only for
    remaining collisions; results cached in `/cache/hashes.yaml` keyed by `(path, size, mtime)`.
    The files are opened read-only, which is compatible with the `:ro` mounts.
 
-7. **Alerts and monitoring**
+5. **Alerts and monitoring**
    *Why:* be warned when a share grows fast or inaccessible items appear.
    *How to:* expose a Prometheus `/metrics` endpoint (totals per root and per category, scan
    duration) and/or a configurable webhook (Gotify, ntfy, Discord) fired at the end of a scan in
    `ScanManager._run` when thresholds from `config.yaml` are crossed.
 
-8. **Accent-insensitive search and locale-aware sorting**
-    *How to:* when building the search text in `Store.warm_up`, normalise names with
-    `unicodedata.normalize("NFKD", …)` and strip combining marks (`unicodedata.combining`), and
-    apply the same normalisation to `q`; for sorting, build the name rank from those normalised
-    names.
+6. **Accent-insensitive search and locale-aware sorting**
+   *How to:* when building the search texts in `Store.warm_up` (file names, folder names and folder
+   paths), normalise them with `unicodedata.normalize("NFKD", …)` and strip combining marks
+   (`unicodedata.combining`), and apply the same normalisation to `q`; for sorting, build the name
+   rank from those normalised names.
 
-9. **Per-root schedules**
-    *How to:* add an optional `interval_minutes` to `RootConfig`, let `Scheduler.compute_next`
-    pick the earliest due root, and call `ScanManager.start([root_id], "planifié")`.
+7. **Per-root schedules**
+   *How to:* add an optional `interval_minutes` to `RootConfig`, let `Scheduler.compute_next`
+   pick the earliest due root, and call `ScanManager.start([root_id], "planifié")`.
 
-10. **Frontend end-to-end tests**
-    *How to:* Playwright tests (desktop and mobile viewports) against the app started on
-    generated data (`scripts/gen_tree.py`), run in the CI workflow.
+8. **Frontend end-to-end tests**
+   *How to:* Playwright tests (desktop and mobile viewports) against the app started on
+   generated data (`scripts/gen_tree.py`), run in the CI workflow.
 
-11. **More languages, and English log messages**
-    *How to:* add a dictionary to `web/assets/i18n.js` and `app/i18n.py` (the tests check that
-    every language has the same keys) and turn the language button into a menu; for logs, translate
-    the `log.info(...)` messages in `app/` (they are plain strings with structured extras).
+9. **More languages, and English log messages**
+   *How to:* add a dictionary to `web/assets/i18n.js` and `app/i18n.py` (the tests check that
+   every language has the same keys) and turn the language button into a menu; for logs, translate
+   the `log.info(...)` messages in `app/` (they are plain strings with structured extras).
 
 ---
 
@@ -828,6 +843,19 @@ Choices made outside, or on top of, the original specification:
     a missing one, so its existence is not revealed.
 15. **Administrators cannot reset other administrators' passwords**, as requested for "normal"
     accounts only; recovery goes through account deletion or `ADMIN_USER`/`ADMIN_PASSWORD`.
+16. **`statx(2)` through `ctypes`** rather than a compiled extension or Python 3.15's `os.statx`:
+    the image stays on Python 3.12 and needs no compiler. The call replaces the per-file `stat`,
+    so reading birth times costs nothing; `AT_NO_AUTOMOUNT` keeps the scan from triggering an
+    automount. The index stores both dates (`ctime`, then `btime` or `null`); the API keeps the
+    `ctime` name for "creation date" (real one when known) so existing links and scripts still
+    work, and adds `ctime_birth` to each row.
+17. **The [`regex`](https://pypi.org/project/regex/) module for user regular expressions**
+    (≈ 1 MB): unlike `re`, it accepts a timeout and releases the GIL while matching, so a
+    catastrophic expression such as `(a|aa)+$`, typed by anyone including a viewer, is stopped
+    after 10 s without freezing the other requests. Wildcards and substrings still go through `re`
+    on the joined search text, which is much faster.
+18. **Full-path search without a full-path index**: paths are rebuilt folder by folder from the
+    folder path and the file-name search text, so this mode costs no memory between queries.
 
 ## License
 
